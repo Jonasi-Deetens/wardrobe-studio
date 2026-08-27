@@ -16,7 +16,7 @@ import {
 import { boxOfPoints, unionBox, type Box3 } from "../core/geometry";
 import { partBounds, type Part } from "../core/part";
 import type { WardrobeSpec } from "../spec/types";
-import { buildCarcase, type RegionBounds } from "./carcase";
+import { buildCarcase, buildTopStretcher, type RegionBounds } from "./carcase";
 import { addParts, createContext, type SolverContext } from "./context";
 import { buildDoors, type ImpossibleLeaf, type ResolvedLeaf } from "./doors";
 import { freezeDraft, type HardwareUse, type Joint, type PartDraft } from "./draft";
@@ -69,6 +69,9 @@ export function solve(spec: WardrobeSpec): WardrobeModel {
   /* 2. Divide the interior and place the fittings. */
   const interiorBounds: RegionBounds = carcase.interiorBounds;
   const layout = buildLayout(ctx, spec.layout, frame.interior, interiorBounds);
+  /* The stretcher is fitted between the partitions, so it can only be built once they
+     exist. */
+  buildTopStretcher(ctx, { leftId: carcase.leftSideId, rightId: carcase.rightSideId });
   const fittings = buildFittings(ctx, layout.bays);
 
   /* 3. Fronts. */

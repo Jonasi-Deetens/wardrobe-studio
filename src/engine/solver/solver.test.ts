@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { hingeCountForHeight } from "../catalog/hardware";
 import { getBanding, getMaterial } from "../catalog/materials";
 import { partBounds, type Part } from "../core/part";
 import { isMultipleOf } from "../core/units";
@@ -188,10 +189,14 @@ describe("hinges", () => {
   it("counts hinges by leaf height", () => {
     const model = solve(createDefaultSpec());
     for (const leaf of model.leaves) {
-      // The default carcase is over 2000mm, so a leaf needs five hinges.
-      expect(leaf.hingeCount).toBeGreaterThanOrEqual(4);
+      expect(leaf.hingeCount).toBe(hingeCountForHeight(leaf.height));
       expect(leaf.hingeYs).toHaveLength(leaf.hingeCount);
     }
+    /* The default layout has a full-height leaf over the hanging bay and a shorter one
+       above the drawer bank, so the two must not carry the same number of hinges. */
+    const heights = model.leaves.map((leaf) => leaf.height).sort((a, b) => a - b);
+    expect(heights[0]).toBeLessThan(heights[heights.length - 1] as number);
+    expect(model.leaves.map((leaf) => leaf.hingeCount)).toEqual([5, 3]);
   });
 
   it("pulls hinge positions onto the 32mm grid so the plate lands on a system hole", () => {
@@ -322,6 +327,18 @@ describe("layout", () => {
     const bayWidths = new Set(model.bays.map((b) => Math.round(b.clearWidth)));
     const expected = Math.round((clear - t) / 2);
     expect(bayWidths.has(expected)).toBe(true);
+  });
+
+  it("stacks a horizontal split top first, so drawers written under shelves land under them", () => {
+    // The default layout's second column is a bay of shelves over a 700mm drawer bank.
+    const model = solve(createDefaultSpec());
+    const shelves = model.bays.find((b) => b.fitting.kind === "shelves");
+    const drawers = model.bays.find((b) => b.fitting.kind === "drawers");
+    expect(shelves).toBeDefined();
+    expect(drawers).toBeDefined();
+    expect(drawers?.region.y1).toBeLessThanOrEqual((shelves?.region.y0 ?? 0) + 0.01);
+    // The drawers stand on the carcase bottom rather than floating at the top.
+    expect(drawers?.region.y0).toBeCloseTo(model.frame.interior.y0, 1);
   });
 
   it("joins a nested shelf to the divider next to it, not to the carcase side", () => {

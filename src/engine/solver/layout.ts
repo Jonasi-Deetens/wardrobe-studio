@@ -4,7 +4,7 @@ import type { BayNode, Fitting, LayoutNode, SplitNode } from "../spec/types";
 import type { Boundary, RegionBounds } from "./carcase";
 import { addPart, requirePart, type SolverContext } from "./context";
 import { makeJoint, makePanel, type PartDraft } from "./draft";
-import { regionHeight, regionWidth, type Region } from "./frame";
+import { rearLimit, regionHeight, regionWidth, type Region } from "./frame";
 
 /**
  * A compartment after the layout tree has been resolved against real dimensions.
@@ -221,31 +221,37 @@ function splitHorizontally(
 
   const bays: ResolvedBay[] = [];
   const dividers: ResolvedDivider[] = [];
-  let cursor = region.y0;
+
+  /* Children are stacked top first, the way the wardrobe is drawn and the way the
+     layout reads in the editor. Filling upwards from the floor instead turned every
+     stack over: a bay of drawers written under a bay of shelves came out above it, and
+     the walk-in's shoe rack landed at chest height. */
+  let cursor = region.y1;
 
   node.children.forEach((child, index) => {
     const size = Math.max(0, sizes[index] ?? 0);
-    const childRegion: Region = { ...region, y0: mm2(cursor), y1: mm2(cursor + size) };
-    cursor = mm2(cursor + size);
+    const childRegion: Region = { ...region, y1: mm2(cursor), y0: mm2(cursor - size) };
+    cursor = mm2(cursor - size);
 
     const isLast = index === node.children.length - 1;
-    let aboveBoundary: Boundary = bounds.above;
+    let belowBoundary: Boundary = bounds.below;
 
     if (!isLast) {
-      const shelf = createFixedShelf(ctx, node, index, cursor, region, bounds);
-      // Face A of a shelf is its upper surface, so the bay below it looks at face B.
-      aboveBoundary = { partId: shelf.id, faceTowardRegion: "B" };
-      cursor = mm2(cursor + t);
+      const shelfY = mm2(cursor - t);
+      const shelf = createFixedShelf(ctx, node, index, shelfY, region, bounds);
+      // Face A of a shelf is its upper surface, so the bay above it looks at face A.
+      belowBoundary = { partId: shelf.id, faceTowardRegion: "A" };
+      cursor = shelfY;
     }
 
     const childBounds: RegionBounds = {
       left: bounds.left,
       right: bounds.right,
-      below:
+      below: belowBoundary,
+      above:
         index === 0
-          ? bounds.below
-          : { partId: shelfIdFor(node, index - 1), faceTowardRegion: "A" },
-      above: aboveBoundary,
+          ? bounds.above
+          : { partId: shelfIdFor(node, index - 1), faceTowardRegion: "B" },
     };
 
     const outcome = resolveNode(ctx, child.node, childRegion, childBounds, depth + 1);
@@ -272,6 +278,8 @@ function createFixedShelf(
   const t = frame.thickness;
   const materialId = spec.carcase.panelMaterialId;
   const material = getMaterial(materialId);
+  // A shelf high enough to meet the top stretcher stops at its front face.
+  const rearZ = rearLimit(frame, mm2(y + t));
 
   const shelf = makePanel({
     id: shelfIdFor(node, index),
@@ -281,7 +289,7 @@ function createFixedShelf(
     thickness: t,
     orientation: "horizontal-y",
     finishedLength: mm2(regionWidth(region)),
-    finishedWidth: mm2(region.z1 - region.z0),
+    finishedWidth: mm2(region.z1 - rearZ),
     origin: [region.x0, y, region.z1],
     faceADirection: 1,
     grain: material.hasGrain ? "length" : "none",
@@ -306,7 +314,7 @@ function createFixedShelf(
         abutting: shelf,
         abuttingEdge: edge,
         from: [x, mm2(y + t / 2), region.z1],
-        to: [x, mm2(y + t / 2), region.z0],
+        to: [x, mm2(y + t / 2), rearZ],
         structural: true,
         label: `${shelf.label} into ${panel.label}`,
       }),

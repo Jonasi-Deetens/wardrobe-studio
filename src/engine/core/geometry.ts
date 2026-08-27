@@ -132,3 +132,26 @@ export function boxSize(box: Box3): Vec3 {
     box.max[2] - box.min[2],
   ];
 }
+
+export function translateBox(box: Box3, by: Vec3): Box3 {
+  return { min: add(box.min, by), max: add(box.max, by) };
+}
+
+/**
+ * How deeply two boxes interpenetrate on each axis. Negative on an axis means they are
+ * clear of each other along it, and since every panel is axis-aligned, one negative axis
+ * is enough to prove two panels do not touch.
+ */
+export function boxOverlap(a: Box3, b: Box3): Vec3 {
+  return [
+    Math.min(a.max[0], b.max[0]) - Math.max(a.min[0], b.min[0]),
+    Math.min(a.max[1], b.max[1]) - Math.max(a.min[1], b.min[1]),
+    Math.min(a.max[2], b.max[2]) - Math.max(a.min[2], b.min[2]),
+  ];
+}
+
+/** The deepest a pair of boxes overlap, or 0 when they are clear of each other. */
+export function interpenetration(a: Box3, b: Box3): number {
+  const overlap = boxOverlap(a, b);
+  return Math.min(...overlap) <= 0 ? 0 : Math.min(...overlap);
+}

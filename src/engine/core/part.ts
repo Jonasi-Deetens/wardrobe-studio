@@ -189,8 +189,19 @@ export function bandingLength(part: Part): number {
   );
 }
 
+/**
+ * Just enough of a panel to say where it is: what the solver has while it is still
+ * working, before a draft has been frozen into a Part.
+ */
+export type PanelBox = {
+  readonly placement: Placement;
+  readonly length: number;
+  readonly width: number;
+  readonly thickness: number;
+};
+
 /** The eight corners of the panel in assembly space. */
-export function partCorners(part: Part): Vec3[] {
+export function partCorners(part: PanelBox): Vec3[] {
   const { placement, length, width, thickness } = part;
   const corners: Vec3[] = [];
   for (const l of [0, length]) {
@@ -203,7 +214,7 @@ export function partCorners(part: Part): Vec3[] {
   return corners;
 }
 
-export function partBounds(part: Part): Box3 {
+export function partBounds(part: PanelBox): Box3 {
   return boxOfPoints(partCorners(part));
 }
 

@@ -2,6 +2,7 @@ import { getMaterial } from "../catalog/materials";
 import type { Vec3 } from "../core/geometry";
 import type { GrainDirection, PanelFace } from "../core/part";
 import { mm2 } from "../core/units";
+import { addPart, requirePart, type SolverContext } from "./context";
 import type { Frame, Region } from "./frame";
 import type { BandingChoice, HardwareUse, Joint, PartDraft } from "./draft";
 import { makeJoint, makePanel } from "./draft";
@@ -400,60 +401,8 @@ export function buildCarcase(frame: Frame): CarcaseResult {
   /* Levelling legs are billed by applyLevellingLegs, from the plates it actually
      drills into the underside of the bottom panel. */
 
-  /* ------------------------------------------------------- top stretcher --- */
-
-  if (spec.carcase.topStretcher) {
-    const stretcherHeight = 100;
-    const stretcher = makePanel({
-      id: "stretcher-top",
-      role: "stretcher",
-      label: "Top stretcher, rear",
-      materialId,
-      thickness: t,
-      orientation: "panel-z-wide",
-      finishedLength: mm2(frame.interior.x1 - frame.interior.x0),
-      finishedWidth: stretcherHeight,
-      origin: [frame.interior.x0, mm2(frame.topPanelY - stretcherHeight), frame.backFrontZ],
-      faceADirection: 1,
-      grain,
-      banding: {},
-      notes: ["Resists racking and gives the wall fixings something solid to pull against."],
-    });
-    parts.push(stretcher);
-
-    joints.push(
-      makeJoint({
-        id: "stretcher-to-side-left",
-        through: leftSide,
-        throughFace: "A",
-        abutting: stretcher,
-        abuttingEdge: "l0",
-        from: [
-          mm2(frame.leftSideX + t),
-          mm2(frame.topPanelY - stretcherHeight),
-          mm2(frame.backFrontZ + t / 2),
-        ],
-        to: [mm2(frame.leftSideX + t), frame.topPanelY, mm2(frame.backFrontZ + t / 2)],
-        structural: true,
-        label: "Top stretcher into left side",
-      }),
-      makeJoint({
-        id: "stretcher-to-side-right",
-        through: rightSide,
-        throughFace: "A",
-        abutting: stretcher,
-        abuttingEdge: "l1",
-        from: [
-          mm2(frame.rightSideX - t),
-          mm2(frame.topPanelY - stretcherHeight),
-          mm2(frame.backFrontZ + t / 2),
-        ],
-        to: [mm2(frame.rightSideX - t), frame.topPanelY, mm2(frame.backFrontZ + t / 2)],
-        structural: true,
-        label: "Top stretcher into right side",
-      }),
-    );
-  }
+  /* The rear top stretcher is built by buildTopStretcher, once the layout is known:
+     it has to be fitted in lengths between whatever partitions reach the top. */
 
   const interiorBounds: RegionBounds = {
     left: { partId: leftSide.id, faceTowardRegion: "A" },
@@ -479,4 +428,89 @@ export function buildCarcase(frame: Frame): CarcaseResult {
 /** The interior region, restated here so callers do not have to reach into the frame. */
 export function interiorRegion(frame: Frame): Region {
   return frame.interior;
+}
+
+/**
+ * The rear top stretcher.
+ *
+ * It is fitted in lengths between the verticals that reach the top of the carcase,
+ * which is how a rail is fitted in a run of cabinets and is the reason it has to be
+ * built after the layout rather than with the rest of the box. A single full-width
+ * board would have to pass straight through every partition; notching each partition
+ * around it is the other way a shop does this, but it costs a machining operation per
+ * partition and buys nothing here, because each length is jointed at both ends and so
+ * braces the carcase against racking just as well.
+ */
+export function buildTopStretcher(
+  ctx: SolverContext,
+  sides: { readonly leftId: string; readonly rightId: string },
+): void {
+  const { frame, spec } = ctx;
+  const band = frame.stretcher;
+  if (band === null) return;
+
+  const t = frame.thickness;
+  const materialId = spec.carcase.panelMaterialId;
+
+  /* Partitions that stop below the band are no obstacle, so they do not break the
+     stretcher into another length. */
+  const crossing = ctx.parts
+    .filter((part) => part.role === "divider")
+    .filter((part) => part.placement.origin[1] + part.length > band.bottomY + 0.01)
+    .map((part) => ({ id: part.id, x0: part.placement.origin[0] }))
+    .sort((a, b) => a.x0 - b.x0);
+
+  type End = { readonly partId: string; readonly x: number; readonly face: PanelFace };
+  const lefts: End[] = [
+    { partId: sides.leftId, x: frame.interior.x0, face: "A" },
+    ...crossing.map((d) => ({ partId: d.id, x: mm2(d.x0 + t), face: "A" as const })),
+  ];
+  const rights: End[] = [
+    ...crossing.map((d) => ({ partId: d.id, x: d.x0, face: "B" as const })),
+    { partId: sides.rightId, x: frame.interior.x1, face: "A" },
+  ];
+
+  lefts.forEach((left, index) => {
+    const right = rights[index] as End;
+    const span = mm2(right.x - left.x);
+    if (span <= 0) return;
+
+    const stretcher = makePanel({
+      id: `stretcher-top-${index + 1}`,
+      role: "stretcher",
+      label: lefts.length > 1 ? `Top stretcher, rear ${index + 1}` : "Top stretcher, rear",
+      materialId,
+      thickness: t,
+      orientation: "panel-z-wide",
+      finishedLength: span,
+      finishedWidth: band.height,
+      origin: [left.x, band.bottomY, frame.backFrontZ],
+      faceADirection: 1,
+      grain: grainOf(materialId),
+      banding: {},
+      notes: ["Resists racking and gives the wall fixings something solid to pull against."],
+    });
+    addPart(ctx, stretcher);
+
+    const midZ = mm2(frame.backFrontZ + t / 2);
+    const addEndJoint = (end: End, edge: "l0" | "l1"): void => {
+      const panel = requirePart(ctx, end.partId);
+      ctx.joints.push(
+        makeJoint({
+          id: `${stretcher.id}-to-${panel.id}`,
+          through: panel,
+          throughFace: end.face,
+          abutting: stretcher,
+          abuttingEdge: edge,
+          from: [end.x, band.bottomY, midZ],
+          to: [end.x, frame.topPanelY, midZ],
+          structural: true,
+          label: `${stretcher.label} into ${panel.label}`,
+        }),
+      );
+    };
+
+    addEndJoint(left, "l0");
+    addEndJoint(right, "l1");
+  });
 }

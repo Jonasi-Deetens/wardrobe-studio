@@ -427,6 +427,17 @@ function doorFindings(model: WardrobeModel): Finding[] {
   }
 
   for (const missing of model.impossibleLeaves) {
+    if (missing.reason === "drawer-bank") {
+      out.push({
+        id: `leaf-impossible-${missing.index}`,
+        severity: "advice",
+        title: `No door ${missing.index}: drawer fronts fill that bay`,
+        detail:
+          "A door leaf and a drawer front both sit on the front plane, so a leaf cannot cover a bank of fronts. This bay is left with its fronts, which is how it would be built. Turn the drawer fronts off if the drawers are meant to live behind a door instead.",
+        parameter: "layout",
+      });
+      continue;
+    }
     const culprit =
       missing.height <= 0
         ? { axis: "height", parameter: "doors.revealTop" as const }

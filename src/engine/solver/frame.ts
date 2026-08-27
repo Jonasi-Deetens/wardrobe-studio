@@ -72,7 +72,34 @@ export type Frame = {
   readonly interior: Region;
   /** Depth of a full-depth internal panel, front edge to back panel. */
   readonly internalDepth: number;
+  /** The band across the top rear the stretcher occupies, or null when there is none. */
+  readonly stretcher: StretcherBand | null;
 };
+
+/**
+ * Where the rear top stretcher lives. Anything that reaches this high has to stop at
+ * `frontZ` rather than running back to the back panel, and the stretcher itself is
+ * fitted in lengths between the verticals that reach it.
+ */
+export type StretcherBand = {
+  readonly height: number;
+  /** Y of the underside of the stretcher. */
+  readonly bottomY: number;
+  /** Z of the front face of the stretcher, which is the rear limit for anything above. */
+  readonly frontZ: number;
+};
+
+export const STRETCHER_HEIGHT = 100;
+
+/**
+ * The rear plane a panel has to stop at, given how high it reaches. Full-depth panels
+ * that stay below the stretcher run all the way to the back panel.
+ */
+export function rearLimit(frame: Frame, topY: number): number {
+  const band = frame.stretcher;
+  if (band === null || topY <= band.bottomY + 0.01) return frame.interior.z0;
+  return band.frontZ;
+}
 
 /**
  * The System 32 sizing relations.
@@ -212,5 +239,12 @@ export function resolveFrame(spec: WardrobeSpec): Frame {
     backThickness,
     interior,
     internalDepth: mm2(frontZ - backFrontZ),
+    stretcher: spec.carcase.topStretcher
+      ? {
+          height: STRETCHER_HEIGHT,
+          bottomY: mm2(topPanelY - STRETCHER_HEIGHT),
+          frontZ: mm2(backFrontZ + t),
+        }
+      : null,
   };
 }

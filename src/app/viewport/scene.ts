@@ -1,7 +1,7 @@
 import { Matrix4, Vector3 } from "three";
 import { getMaterial } from "@/engine/catalog/materials";
 import { boxCenter, type Vec3 } from "@/engine/core/geometry";
-import type { Part, PartRole } from "@/engine/core/part";
+import { partCenter, type Part, type PartRole } from "@/engine/core/part";
 import type { WardrobeModel } from "@/engine/solver";
 
 /**
@@ -56,54 +56,53 @@ export function partMatrix(part: Part, target = new Matrix4()): Matrix4 {
 }
 
 /**
- * The direction a part travels in an exploded view.
- *
- * Panels read best when they separate along their own thickness — that is the gap the
- * eye expects to see open up — so the direction is the thickness axis, turned to point
- * away from the middle of the wardrobe.
+ * How much further apart the assembly is spread at full explode. 1.1 rather than
+ * something larger because the camera does not refit while the slider moves.
  */
-export function explodeDirection(part: Part, modelCenter: Vec3): Vector3 {
-  const { origin, lAxis, wAxis, tAxis } = part.placement;
-  const center = new Vector3(origin[0], origin[1], origin[2])
-    .addScaledVector(new Vector3(lAxis[0], lAxis[1], lAxis[2]), part.length / 2)
-    .addScaledVector(new Vector3(wAxis[0], wAxis[1], wAxis[2]), part.width / 2)
-    .addScaledVector(new Vector3(tAxis[0], tAxis[1], tAxis[2]), part.thickness / 2);
+const EXPLODE_SPREAD = 1.1;
 
-  const away = center.clone().sub(new Vector3(modelCenter[0], modelCenter[1], modelCenter[2]));
-  const normal = new Vector3(tAxis[0], tAxis[1], tAxis[2]);
-  if (normal.dot(away) < 0) normal.negate();
+/**
+ * The extra forward or rearward travel a part gets, as a fraction of the longest side of
+ * the wardrobe.
+ *
+ * A front comes off forwards and the back panel comes off backwards, whatever their
+ * position says, because that is the way they actually come off — and a drawer box
+ * follows its front out of the carcase, but never as far, so the front stays in front of
+ * it.
+ */
+const ROLE_TRAVEL: Partial<Record<PartRole, number>> = {
+  door: 0.34,
+  "drawer-front": 0.34,
+  "drawer-side": 0.2,
+  "drawer-back": 0.2,
+  "drawer-bottom": 0.2,
+  back: -0.26,
+};
 
-  /* Fronts come off forwards whatever their thickness axis says, because that is how
-     they actually come off. */
-  if (part.role === "door" || part.role === "drawer-front") return new Vector3(0, 0, 1);
-  if (part.role === "back") return new Vector3(0, 0, -1);
-  if (isDrawerBox(part.role)) return new Vector3(0, 0, 1);
-  return normal.normalize();
-}
+/**
+ * Where a part sits in an exploded view.
+ *
+ * Every part moves directly away from the middle of the wardrobe, by an amount
+ * proportional to how far out it already is. Scaling the spacing like this is what keeps
+ * the view readable: no two parts can be driven into each other, because every distance
+ * between them only grows — which a per-part push along the thickness axis cannot
+ * promise, and which is why a divider used to end up inside the drawer next to it.
+ *
+ * On top of that, fronts and drawer boxes get a push along Z, in the direction they
+ * already lie, so the parts that come off the front of a wardrobe are seen to.
+ */
+export function explodeOffset(part: Part, bounds: SceneBounds, factor: number): Vector3 {
+  const center = new Vector3(...partCenter(part));
+  const offset = center
+    .sub(new Vector3(bounds.center[0], bounds.center[1], bounds.center[2]))
+    .multiplyScalar(EXPLODE_SPREAD * factor);
 
-function isDrawerBox(role: PartRole): boolean {
-  return role === "drawer-side" || role === "drawer-back" || role === "drawer-bottom";
-}
-
-/** How far a part moves at full explode, in millimetres. */
-export function explodeDistance(part: Part, modelSize: Vec3): number {
-  const span = Math.max(modelSize[0], modelSize[1], modelSize[2]);
-  switch (part.role) {
-    case "door":
-    case "drawer-front":
-      return span * 0.42;
-    case "drawer-side":
-    case "drawer-back":
-    case "drawer-bottom":
-      return span * 0.3;
-    case "back":
-      return span * 0.28;
-    case "adjustable-shelf":
-    case "shoe-shelf":
-      return span * 0.16;
-    default:
-      return span * 0.2;
+  const travel = ROLE_TRAVEL[part.role];
+  if (travel !== undefined) {
+    const span = Math.max(bounds.size[0], bounds.size[1], bounds.size[2]);
+    offset.z += travel * span * factor;
   }
+  return offset;
 }
 
 export type PartVisual = {
@@ -193,13 +192,8 @@ export function partTransforms(
   for (const part of model.parts) {
     const offset = new Matrix4();
     if (explode > 0) {
-      const direction = explodeDirection(part, bounds.center);
-      const distance = explodeDistance(part, bounds.size) * explode;
-      offset.makeTranslation(
-        direction.x * distance,
-        direction.y * distance,
-        direction.z * distance,
-      );
+      const travel = explodeOffset(part, bounds, explode);
+      offset.makeTranslation(travel.x, travel.y, travel.z);
     }
     const swing = swings.get(part.id);
     if (swing && doorsOpen > 0) {

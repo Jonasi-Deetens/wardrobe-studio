@@ -1,5 +1,6 @@
 import { getHinge, hingeCountForHeight } from "../catalog/hardware";
 import { getMaterial } from "../catalog/materials";
+import { partBounds } from "../core/part";
 import { mm2 } from "../core/units";
 import type { HingeSideRule } from "../spec/types";
 import { addHardware, addPart, type SolverContext } from "./context";
@@ -37,6 +38,11 @@ export type ImpossibleLeaf = {
   readonly index: number;
   readonly width: number;
   readonly height: number;
+  /**
+   * Why there is no leaf. `reveals` is a mistake in the numbers; `drawer-bank` is the
+   * ordinary case of a bay filled with drawer fronts, which needs no door at all.
+   */
+  readonly reason: "reveals" | "drawer-bank";
 };
 
 export type DoorsResult = {
@@ -148,6 +154,13 @@ export function buildDoors(
   const leaves: ResolvedLeaf[] = [];
   const impossible: ImpossibleLeaf[] = [];
 
+  /* Fronts already built — drawer fronts and pull-out fronts — stand on the same plane
+     as the door leaves. A leaf has to keep out of their way rather than pass through
+     them, so each one blocks off part of its column. */
+  const fronts = ctx.parts
+    .filter((part) => part.role === "drawer-front")
+    .map((part) => partBounds(part));
+
   for (let i = 0; i < leafCount; i += 1) {
     const spanStart = boundaries[i] as number;
     const spanEnd = boundaries[i + 1] as number;
@@ -163,13 +176,29 @@ export function buildDoors(
     const x1 = mm2(spanEnd - rightTrim);
     const width = mm2(x1 - x0);
 
-    const y0 = mm2(frontBottomY + spec.doors.revealBottom + (inset ? t + gap : 0));
-    const y1 = mm2(frontTopY - spec.doors.revealTop - (inset ? t + gap : 0));
+    const openingY0 = mm2(frontBottomY + spec.doors.revealBottom + (inset ? t + gap : 0));
+    const openingY1 = mm2(frontTopY - spec.doors.revealTop - (inset ? t + gap : 0));
+
+    /* Whatever is left of the column once the drawer fronts in it are taken out. A bank
+       of drawers at the bottom of a bay leaves a shorter leaf above it, which is how the
+       arrangement is built for real: the leaf stops on the top drawer front, and the
+       bank is its own set of fronts. */
+    const blocked = fronts
+      .filter((box) => box.max[0] > x0 + 1 && box.min[0] < x1 - 1)
+      .map((box) => ({ min: mm2(box.min[1] - gap), max: mm2(box.max[1] + gap) }));
+    const { y0, y1 } = freeSpan(openingY0, openingY1, blocked);
     const height = mm2(y1 - y0);
-    if (width <= 0 || height <= 0) {
-      // The gaps, reveals and inset allowances have eaten the whole opening. Record
-      // it so the advisor can name the parameter instead of a leaf just missing.
-      impossible.push({ index: i + 1, width, height });
+
+    if (width <= 0 || height < MIN_LEAF_HEIGHT) {
+      /* Either the gaps, reveals and inset allowances have eaten the whole opening, or
+         the fronts have. Record it so the advisor can say which, instead of a leaf
+         simply going missing. */
+      impossible.push({
+        index: i + 1,
+        width,
+        height: mm2(Math.max(0, height)),
+        reason: blocked.length > 0 && width > 0 ? "drawer-bank" : "reveals",
+      });
       continue;
     }
 
@@ -268,6 +297,39 @@ export function buildDoors(
   }
 
   return { leaves, overlay, impossible };
+}
+
+/**
+ * Anything shorter than this is a flap or a lift-up, not a door, so no leaf is made for
+ * the sliver left over above a drawer bank that all but fills its bay.
+ */
+const MIN_LEAF_HEIGHT = 150;
+
+type Interval = { readonly min: number; readonly max: number };
+
+/**
+ * The tallest run of `[y0, y1]` that none of the blocks covers. Written for the usual
+ * case of one bank of fronts at the bottom or the top, but it copes with a bank in the
+ * middle by taking the taller of the two remaining runs.
+ */
+function freeSpan(
+  y0: number,
+  y1: number,
+  blocks: readonly Interval[],
+): { readonly y0: number; readonly y1: number } {
+  const clipped = blocks
+    .map((block) => ({ min: Math.max(block.min, y0), max: Math.min(block.max, y1) }))
+    .filter((block) => block.max > block.min)
+    .sort((a, b) => a.min - b.min);
+
+  let best = { y0, y1: y0 };
+  let cursor = y0;
+  for (const block of clipped) {
+    if (block.min - cursor > best.y1 - best.y0) best = { y0: cursor, y1: block.min };
+    cursor = Math.max(cursor, block.max);
+  }
+  if (y1 - cursor > best.y1 - best.y0) best = { y0: cursor, y1 };
+  return { y0: mm2(best.y0), y1: mm2(best.y1) };
 }
 
 /** Which carcase panel sits at a given X: an outer side, or a divider. */

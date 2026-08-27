@@ -4,7 +4,7 @@ import { mm2, snapDown } from "../core/units";
 import type { DrawersFitting, HangingFitting, ShelvesFitting, ShoeRackFitting, PulloutFitting } from "../spec/types";
 import { addHardware, addPart, type SolverContext } from "./context";
 import { makePanel, type PartDraft } from "./draft";
-import type { Region } from "./frame";
+import { rearLimit, type Region } from "./frame";
 import type { ResolvedBay } from "./layout";
 
 /**
@@ -130,6 +130,8 @@ function createShelf(
   const { spec } = ctx;
   // 1mm of side clearance in total: enough to fit, too little to see.
   const clearance = params.adjustable ? 1 : 0;
+  // A shelf near the top of the carcase stops at the stretcher, not at the back panel.
+  const rearZ = rearLimit(ctx.frame, mm2(params.y + material.thickness));
 
   const shelf = makePanel({
     id: params.id,
@@ -139,7 +141,7 @@ function createShelf(
     thickness: material.thickness,
     orientation: "horizontal-y",
     finishedLength: mm2(bay.clearWidth - clearance),
-    finishedWidth: mm2(bay.clearDepth - params.setback),
+    finishedWidth: mm2(bay.region.z1 - rearZ - params.setback),
     origin: [mm2(bay.region.x0 + clearance / 2), params.y, mm2(bay.region.z1 - params.setback)],
     faceADirection: 1,
     grain: material.hasGrain ? "length" : "none",
@@ -549,8 +551,9 @@ function buildDrawers(
     /* front */
     let frontPartId: string | null = null;
     if (fitting.hasFronts) {
-      const frontWidth = mm2(bay.clearWidth + frontOverlayAllowance(ctx, bay));
-      const frontX = mm2(bay.region.x0 - frontOverlayAllowance(ctx, bay) / 2);
+      const overlay = frontOverlay(ctx, bay);
+      const frontWidth = mm2(bay.clearWidth + overlay.left + overlay.right);
+      const frontX = mm2(bay.region.x0 - overlay.left);
       const front = makePanel({
         id: `${drawerId}-front`,
         role: "drawer-front",
@@ -609,23 +612,30 @@ function buildDrawers(
 }
 
 /**
- * Extra width a front needs beyond the clear opening so it covers the panels each
- * side. Inset fronts sit inside the opening instead, so they get a negative
- * allowance.
+ * How far a front reaches past its clear opening on each side, so it covers the panel
+ * beside it.
+ *
+ * An overlay front takes the whole of an outer side panel, because nothing else is
+ * covering it, but only half of a partition, because whatever is in the next bay covers
+ * the other half. That is the same rule a pair of door leaves meeting over a divider
+ * follows, and it is what keeps a drawer front out of the leaf next door. Inset fronts
+ * sit inside the opening instead, so their allowance is negative.
  */
-function frontOverlayAllowance(ctx: SolverContext, bay: ResolvedBay): number {
+function frontOverlay(
+  ctx: SolverContext,
+  bay: ResolvedBay,
+): { readonly left: number; readonly right: number } {
   const t = ctx.frame.thickness;
   const gap = ctx.spec.doors.gap;
-  switch (ctx.spec.doors.overlayStyle) {
-    case "full":
-      return mm2(2 * t - gap);
-    case "half":
-      return mm2(t - gap);
-    case "inset":
-      return mm2(-2 * gap);
-  }
-  void bay;
-  return 0;
+  const style = ctx.spec.doors.overlayStyle;
+  if (style === "inset") return { left: mm2(-gap), right: mm2(-gap) };
+
+  const shared = mm2(t / 2 - gap / 2);
+  const outer = style === "full" ? t : shared;
+  return {
+    left: bay.region.x0 - t <= ctx.frame.leftSideX + 0.01 ? outer : shared,
+    right: bay.region.x1 + t >= ctx.frame.rightSideX - 0.01 ? outer : shared,
+  };
 }
 
 /* -------------------------------------------------------------- shoe rack - */
