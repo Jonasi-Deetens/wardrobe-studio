@@ -1,0 +1,128 @@
+@import "tailwindcss";
+
+/*
+  Dark-first, CAD-like palette. Surfaces step up in lightness with elevation so
+  panels read as physical layers; a single warm accent marks selection because
+  the 3D scene already uses neutral wood tones.
+*/
+:root {
+  --ws-bg: oklch(0.17 0.008 260);
+  --ws-surface: oklch(0.21 0.009 260);
+  --ws-surface-raised: oklch(0.25 0.01 260);
+  --ws-surface-hover: oklch(0.29 0.012 260);
+  --ws-border: oklch(0.32 0.012 260);
+  --ws-border-strong: oklch(0.42 0.014 260);
+  --ws-text: oklch(0.95 0.004 260);
+  --ws-text-muted: oklch(0.72 0.012 260);
+  --ws-text-faint: oklch(0.56 0.012 260);
+  --ws-accent: oklch(0.72 0.16 62);
+  --ws-accent-strong: oklch(0.79 0.17 62);
+  --ws-accent-contrast: oklch(0.2 0.02 62);
+  --ws-info: oklch(0.72 0.11 235);
+  --ws-warn: oklch(0.79 0.15 85);
+  --ws-error: oklch(0.66 0.19 22);
+  --ws-ok: oklch(0.74 0.14 155);
+}
+
+@theme inline {
+  --color-bg: var(--ws-bg);
+  --color-surface: var(--ws-surface);
+  --color-raised: var(--ws-surface-raised);
+  --color-hover: var(--ws-surface-hover);
+  --color-line: var(--ws-border);
+  --color-line-strong: var(--ws-border-strong);
+  --color-ink: var(--ws-text);
+  --color-muted: var(--ws-text-muted);
+  --color-faint: var(--ws-text-faint);
+  --color-accent: var(--ws-accent);
+  --color-accent-strong: var(--ws-accent-strong);
+  --color-on-accent: var(--ws-accent-contrast);
+  --color-info: var(--ws-info);
+  --color-warn: var(--ws-warn);
+  --color-error: var(--ws-error);
+  --color-ok: var(--ws-ok);
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono:
+    ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Menlo, monospace;
+
+  --radius-panel: 0.625rem;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-line);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-bg);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    -webkit-font-smoothing: antialiased;
+    overscroll-behavior: none;
+  }
+
+  /* Numeric fields are read as measurements, so they get tabular figures. */
+  input[type="number"],
+  input[inputmode="decimal"],
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  input[type="number"]::-webkit-outer-spin-button,
+  input[type="number"]::-webkit-inner-spin-button {
+    appearance: none;
+    margin: 0;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+  }
+
+  ::selection {
+    background: var(--color-accent);
+    color: var(--color-on-accent);
+  }
+}
+
+@layer components {
+  .ws-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-line-strong) transparent;
+  }
+
+  .ws-scroll::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  .ws-scroll::-webkit-scrollbar-thumb {
+    background: var(--color-line-strong);
+    border: 3px solid transparent;
+    background-clip: content-box;
+    border-radius: 999px;
+  }
+
+  .ws-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@utility grid-paper {
+  background-image:
+    linear-gradient(var(--color-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--color-line) 1px, transparent 1px);
+  background-size:
+    32px 32px,
+    32px 32px;
+}
