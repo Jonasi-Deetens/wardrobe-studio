@@ -257,6 +257,37 @@ describe("drawers", () => {
     }
   });
 
+  it("closes the box with its front and back flush to the ends of the sides", () => {
+    // The bottom is cut to sit in a groove in all four, so a box end placed a thickness
+    // in from where the sides finish leaves the bottom hanging out past it.
+    const model = solve(createDefaultSpec());
+    expect(model.drawers.length).toBeGreaterThan(0);
+    for (const drawer of model.drawers) {
+      const side = partBounds(model.partsById.get(`${drawer.id}-side-left`) as Part);
+      const front = partBounds(model.partsById.get(`${drawer.id}-box-front`) as Part);
+      const back = partBounds(model.partsById.get(`${drawer.id}-box-back`) as Part);
+      const bottom = partBounds(model.partsById.get(`${drawer.id}-bottom`) as Part);
+
+      expect(front.max[2], drawer.id).toBeCloseTo(side.max[2], 1);
+      expect(back.min[2], drawer.id).toBeCloseTo(side.min[2], 1);
+      expect(bottom.max[2], drawer.id).toBeLessThanOrEqual(front.max[2] + 0.01);
+      expect(bottom.min[2], drawer.id).toBeGreaterThanOrEqual(back.min[2] - 0.01);
+    }
+  });
+
+  it("stands an overlay drawer front proud of the carcase rather than through it", () => {
+    const model = solve(createDefaultSpec());
+    const fronts = partsOfRole(model.parts, "drawer-front");
+    expect(fronts.length).toBeGreaterThan(0);
+    for (const front of fronts) {
+      // A full-overlay front covers the front edges of the sides; anything less means it
+      // is buried in them.
+      expect(partBounds(front).min[2], front.id).toBeGreaterThanOrEqual(
+        model.frame.frontZ - 0.01,
+      );
+    }
+  });
+
   it("builds a box of four sides plus a bottom for every drawer", () => {
     const model = solve(createDefaultSpec());
     for (const drawer of model.drawers) {

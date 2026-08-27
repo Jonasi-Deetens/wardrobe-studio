@@ -9,6 +9,7 @@ import {
   Ruler,
   ScanEye,
   Square,
+  Wrench,
 } from "lucide-react";
 import { PART_ROLE_LABELS, type PartRole } from "@/engine/core/part";
 import { cn } from "@/lib/cn";
@@ -112,6 +113,16 @@ export function ViewportControls() {
             label={view.showBack ? "Hide back panel" : "Show back panel"}
             onClick={() => setView({ showBack: !view.showBack })}
             icon={<Layers className="size-3.5" />}
+          />
+          <Toggle
+            active={view.showHardware}
+            label={
+              view.showHardware
+                ? "Hide hardware — rails, handles and fixings"
+                : "Show hardware — rails, handles and fixings"
+            }
+            onClick={() => setView({ showHardware: !view.showHardware })}
+            icon={<Wrench className="size-3.5" />}
           />
         </div>
 

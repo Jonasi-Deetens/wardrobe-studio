@@ -400,6 +400,15 @@ function buildDrawers(
   const heights = drawerFrontHeights(fitting, bay.clearHeight, gap);
   const slideLength = slideLengthForDepth(slide, bay.clearDepth);
 
+  /* An overlay front stands proud of the carcase and only an inset front sits inside
+     it, exactly as for a door leaf. Placing every front on the carcase front plane put
+     the overlay ones a thickness too far back, where they ran through the side panels
+     instead of covering them. */
+  const frontOuterZ =
+    spec.doors.overlayStyle === "inset"
+      ? frame.frontZ
+      : mm2(frame.frontZ + frontMaterial.thickness);
+
   // The runner takes a fixed amount out of the opening; what is left, less the two
   // box sides, is the inside width.
   const boxOutsideWidth = mm2(bay.clearWidth - slide.widthClearance);
@@ -451,12 +460,12 @@ function buildDrawers(
       );
     }
 
-    /* box front and back */
+    /* box front and back, closing the ends of the run the sides make: each sits with
+       one face on the end of the box, so the grooved bottom reaches into it rather
+       than past it */
     for (const end of ["front", "back"] as const) {
       const isFront = end === "front";
-      const z = isFront
-        ? mm2(boxFrontZ - boxMaterial.thickness)
-        : mm2(boxRearZ + boxMaterial.thickness);
+      const z = isFront ? boxFrontZ : boxRearZ;
       addPart(
         ctx,
         makePanel({
@@ -508,7 +517,10 @@ function buildDrawers(
       const usable = slideLength - 2 * boxMaterial.thickness;
       const step = usable / (fitting.dividers + 1);
       for (let d = 0; d < fitting.dividers; d += 1) {
-        const z = mm2(boxFrontZ - boxMaterial.thickness - step * (d + 1));
+        // Centred on the division, measured back from the inside of the box front.
+        const z = mm2(
+          boxFrontZ - boxMaterial.thickness - step * (d + 1) - boxMaterial.thickness / 2,
+        );
         addPart(
           ctx,
           makePanel({
@@ -548,7 +560,7 @@ function buildDrawers(
         orientation: "panel-z-wide",
         finishedLength: frontWidth,
         finishedWidth: mm2(frontHeight - gap),
-        origin: [frontX, mm2(opening.y0 + gap / 2), frame.frontZ],
+        origin: [frontX, mm2(opening.y0 + gap / 2), frontOuterZ],
         // Face A is the back of the front, which is where the fixings go.
         faceADirection: -1,
         grain: frontMaterial.hasGrain ? "width" : "none",

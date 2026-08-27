@@ -5,25 +5,13 @@ import {
   Color,
   EdgesGeometry,
   LineBasicMaterial,
-  Matrix4,
   MeshStandardMaterial,
+  type Matrix4,
 } from "three";
 import type { Part } from "@/engine/core/part";
 import type { WardrobeModel } from "@/engine/solver";
 import { useStudio } from "../store/useStudio";
-import {
-  applySwing,
-  doorSwings,
-  explodeDirection,
-  explodeDistance,
-  partMatrix,
-  sceneBounds,
-  visualFor,
-  type DoorSwing,
-} from "./scene";
-
-/** Maximum leaf swing. Past this the door is behind the carcase and reads as noise. */
-const MAX_SWING = (100 * Math.PI) / 180;
+import { visualFor, type PartTransform } from "./scene";
 
 /*
  * One geometry and one material per appearance, for the whole scene.
@@ -87,46 +75,14 @@ function outlineMaterial(color: string, transparent: boolean, opacity: number): 
 
 type PartsProps = {
   readonly model: WardrobeModel;
+  readonly transforms: ReadonlyMap<string, PartTransform>;
 };
 
-export const Parts = memo(function Parts({ model }: PartsProps) {
-  const explode = useStudio((state) => state.view.explode);
-  const doorsOpen = useStudio((state) => state.view.doorsOpen);
+export const Parts = memo(function Parts({ model, transforms }: PartsProps) {
   const showDoors = useStudio((state) => state.view.showDoors);
   const showBack = useStudio((state) => state.view.showBack);
   const isolateRole = useStudio((state) => state.view.isolateRole);
   const xray = useStudio((state) => state.view.xray);
-
-  const bounds = useMemo(() => sceneBounds(model), [model]);
-  const swings = useMemo(() => {
-    const map = new Map<string, DoorSwing>();
-    for (const swing of doorSwings(model)) map.set(swing.partId, swing);
-    return map;
-  }, [model]);
-
-  const transforms = useMemo(() => {
-    const result = new Map<string, Matrix4>();
-    for (const part of model.parts) {
-      const matrix = partMatrix(part, new Matrix4());
-      if (explode > 0) {
-        const direction = explodeDirection(part, bounds.center);
-        const distance = explodeDistance(part, bounds.size) * explode;
-        const offset = new Matrix4().makeTranslation(
-          direction.x * distance,
-          direction.y * distance,
-          direction.z * distance,
-        );
-        matrix.premultiply(offset);
-      }
-      const swing = swings.get(part.id);
-      if (swing && doorsOpen > 0) {
-        result.set(part.id, applySwing(matrix, swing, doorsOpen * MAX_SWING));
-      } else {
-        result.set(part.id, matrix);
-      }
-    }
-    return result;
-  }, [model, explode, doorsOpen, bounds, swings]);
 
   const visible = useMemo(
     () =>
@@ -144,7 +100,7 @@ export const Parts = memo(function Parts({ model }: PartsProps) {
         <PartMesh
           key={part.id}
           part={part}
-          matrix={transforms.get(part.id) as Matrix4}
+          matrix={(transforms.get(part.id) as PartTransform).matrix}
           dimmed={isolateRole !== null && part.role !== isolateRole}
           xray={xray}
         />

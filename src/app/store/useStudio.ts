@@ -45,6 +45,8 @@ export type ViewState = {
   readonly doorsOpen: number;
   readonly showDoors: boolean;
   readonly showBack: boolean;
+  /** Rails, handles, hinges and the joint fixings, as opposed to the panels. */
+  readonly showHardware: boolean;
   readonly isolateRole: PartRole | null;
 };
 
@@ -58,6 +60,7 @@ const DEFAULT_VIEW: ViewState = {
   doorsOpen: 0,
   showDoors: true,
   showBack: true,
+  showHardware: true,
   isolateRole: null,
 };
 

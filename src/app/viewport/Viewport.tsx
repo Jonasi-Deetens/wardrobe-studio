@@ -7,8 +7,9 @@ import { useDerived, useSelectedPart } from "../store/derived";
 import { useStudio } from "../store/useStudio";
 import { CameraRig } from "./CameraRig";
 import { Dimensions } from "./Dimensions";
+import { Hardware } from "./Hardware";
 import { Parts } from "./Parts";
-import { SCENE_SCALE, sceneBounds } from "./scene";
+import { partTransforms, SCENE_SCALE, sceneBounds } from "./scene";
 import { ViewportControls } from "./ViewportControls";
 import { ViewportLegend } from "./ViewportLegend";
 
@@ -25,10 +26,19 @@ export function Viewport() {
   const selected = useSelectedPart();
   const grid = useStudio((state) => state.view.grid);
   const dimensions = useStudio((state) => state.view.dimensions);
+  const explode = useStudio((state) => state.view.explode);
+  const doorsOpen = useStudio((state) => state.view.doorsOpen);
   const selectPart = useStudio((state) => state.selectPart);
   const hoverPart = useStudio((state) => state.hoverPart);
 
   const bounds = useMemo(() => sceneBounds(model), [model]);
+
+  /* Panels and the hardware mounted on them are placed from one set of transforms, so
+     they cannot disagree about where a door has swung to. */
+  const transforms = useMemo(
+    () => partTransforms(model, { explode, doorsOpen, bounds }),
+    [model, explode, doorsOpen, bounds],
+  );
   const floorSize = Math.max(bounds.size[0], bounds.size[2]) * SCENE_SCALE * 6;
 
   /* The key light and its shadow frustum both follow the size of the wardrobe. */
@@ -120,7 +130,8 @@ export function Viewport() {
           {/* Part transforms come out of the engine in millimetres; one group scale is all
               it takes to put them in the metres the rest of the scene is built in. */}
           <group scale={SCENE_SCALE}>
-            <Parts model={model} />
+            <Parts model={model} transforms={transforms} />
+            <Hardware model={model} transforms={transforms} />
           </group>
           {dimensions ? <Dimensions model={model} selected={selected} /> : null}
 

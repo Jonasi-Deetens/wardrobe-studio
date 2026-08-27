@@ -150,12 +150,67 @@ export function doorSwings(model: WardrobeModel): DoorSwing[] {
 }
 
 /** A hinged leaf rotates about its hinge edge, not about its centre. */
-export function applySwing(matrix: Matrix4, swing: DoorSwing, angle: number): Matrix4 {
-  if (angle === 0) return matrix;
+export function swingMatrix(swing: DoorSwing, angle: number): Matrix4 {
   const toPivot = new Matrix4().makeTranslation(-swing.pivotX, 0, -swing.pivotZ);
   const rotate = new Matrix4().makeRotationY(swing.sign * angle);
   const back = new Matrix4().makeTranslation(swing.pivotX, 0, swing.pivotZ);
-  return back.multiply(rotate).multiply(toPivot).multiply(matrix);
+  return back.multiply(rotate).multiply(toPivot);
+}
+
+/** Maximum leaf swing. Past this the door is behind the carcase and reads as noise. */
+export const MAX_SWING = (100 * Math.PI) / 180;
+
+export type PartTransform = {
+  /** The mesh matrix, with the panel's size baked into the basis. */
+  readonly matrix: Matrix4;
+  /**
+   * The rigid half of that transform — the explode offset and the door swing — in
+   * assembly space. Hardware works out its own position from the panel's placement and
+   * then needs the same movement, without the panel's size baked in.
+   */
+  readonly offset: Matrix4;
+};
+
+export type TransformOptions = {
+  readonly explode: number;
+  readonly doorsOpen: number;
+  readonly bounds: SceneBounds;
+};
+
+/**
+ * Every part's transform for one frame of the view state. Panels and the hardware
+ * mounted on them are drawn from this one map, so a handle cannot drift away from the
+ * door it is screwed to.
+ */
+export function partTransforms(
+  model: WardrobeModel,
+  { explode, doorsOpen, bounds }: TransformOptions,
+): Map<string, PartTransform> {
+  const swings = new Map<string, DoorSwing>();
+  for (const swing of doorSwings(model)) swings.set(swing.partId, swing);
+
+  const result = new Map<string, PartTransform>();
+  for (const part of model.parts) {
+    const offset = new Matrix4();
+    if (explode > 0) {
+      const direction = explodeDirection(part, bounds.center);
+      const distance = explodeDistance(part, bounds.size) * explode;
+      offset.makeTranslation(
+        direction.x * distance,
+        direction.y * distance,
+        direction.z * distance,
+      );
+    }
+    const swing = swings.get(part.id);
+    if (swing && doorsOpen > 0) {
+      offset.premultiply(swingMatrix(swing, doorsOpen * MAX_SWING));
+    }
+    result.set(part.id, {
+      matrix: partMatrix(part, new Matrix4()).premultiply(offset),
+      offset,
+    });
+  }
+  return result;
 }
 
 export type SceneBounds = {
