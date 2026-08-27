@@ -1,4 +1,3 @@
-import { getLevellingLeg } from "../catalog/hardware";
 import { getMaterial } from "../catalog/materials";
 import type { Vec3 } from "../core/geometry";
 import type { GrainDirection, PanelFace } from "../core/part";

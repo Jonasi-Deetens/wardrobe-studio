@@ -1,11 +1,12 @@
 import { Info, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { serialiseSpec } from "@/engine/spec/migrate";
 import { ExportView } from "./export/ExportView";
-import { copyToClipboard, downloadText } from "./lib/download";
 import { encodeSpecToHash } from "./lib/persistence";
+import { copyText, isDesktop, shareBaseUrl } from "./lib/platform";
+import { useDesktopIntegration } from "./lib/useDesktopIntegration";
 import { useBelow } from "./lib/useMediaQuery";
 import { useAutosave, usePersistedGroups, useSession } from "./lib/useSession";
+import { useWindowTitle } from "./lib/useWindowTitle";
 import { NestingView } from "./nesting/NestingView";
 import { PanelView } from "./panel/PanelView";
 import { ParameterPanel } from "./params/ParameterPanel";
@@ -43,6 +44,8 @@ export function App() {
   useAutosave(restored);
   usePersistedGroups(restored);
   useKeyboard();
+  useWindowTitle();
+  useDesktopIntegration();
 
   const [leftWidth, resizeLeft, resetLeft] = usePaneWidth("ws:left", 316, 240, 520);
   const [rightWidth, resizeRight, resetRight] = usePaneWidth("ws:right", 300, 240, 460);
@@ -61,33 +64,28 @@ export function App() {
     if (!summaryIsDrawer) setSummaryOpen(false);
   }, [summaryIsDrawer]);
 
-  const save = useCallback(() => {
-    const name = spec.meta.name.trim() || "wardrobe";
-    downloadText(
-      `${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.json`,
-      serialiseSpec(spec),
-      "application/json",
-    );
-  }, [spec]);
-
   const copyLink = useCallback(() => {
     void (async () => {
       try {
         const hash = await encodeSpecToHash(spec);
-        const url = `${window.location.origin}${window.location.pathname}${hash}`;
-        window.history.replaceState(null, "", hash);
-        const ok = await copyToClipboard(url);
+        const url = `${shareBaseUrl()}${hash}`;
+        /* Only the browser has an address bar worth updating — and it doubles as the
+           fallback when the clipboard refuses. */
+        if (!isDesktop()) window.history.replaceState(null, "", hash);
+        const ok = await copyText(url);
         useStudio.setState({
           notices: [
             ok
               ? "Share link copied. The whole design travels in the link — nothing is uploaded."
-              : "Could not reach the clipboard. The link is in the address bar.",
+              : isDesktop()
+                ? "Could not reach the clipboard. Use “Save project as…” to send the file instead."
+                : "Could not reach the clipboard. The link is in the address bar.",
           ],
         });
       } catch (error) {
         useStudio.setState({
           notices: [
-            `Could not build a share link: ${error instanceof Error ? error.message : "unknown error"}. Use Save to download the project file instead.`,
+            `Could not build a share link: ${error instanceof Error ? error.message : "unknown error"}. Use Save to write the project file instead.`,
           ],
         });
       }
@@ -100,7 +98,6 @@ export function App() {
     <TooltipProvider>
       <div className="flex h-full flex-col overflow-hidden">
         <TopBar
-          onSave={save}
           onCopyLink={copyLink}
           onOpenParameters={() => setParamsOpen(true)}
           onOpenSummary={() => setSummaryOpen(true)}

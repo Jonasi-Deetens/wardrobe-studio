@@ -1,4 +1,6 @@
 import { useEffect } from "react";
+import { isDesktop } from "../lib/platform";
+import { confirmDiscard, openProjectFile, saveProject, saveProjectAs } from "../lib/project";
 import { MODES, redo, undo, useStudio, type StandardView } from "../store/useStudio";
 
 const VIEW_KEYS: Record<string, StandardView> = {
@@ -31,18 +33,48 @@ export function useKeyboard(): void {
         target?.tagName === "SELECT" ||
         target?.isContentEditable === true;
 
-      const meta = event.ctrlKey || event.metaKey;
+      /*
+       * Every modifier shortcut belongs to the native menu on the desktop.
+       *
+       * A menu accelerator is handled by the window before the webview ever sees the key, so
+       * anything also handled here would run twice — two save dialogs for one Ctrl+S. The
+       * split is drawn at the modifier deliberately: bare keys cannot go in a menu at all,
+       * since an accelerator would fire while someone is typing a width into a text box.
+       */
+      const meta = (event.ctrlKey || event.metaKey) && !isDesktop();
 
-      if (meta && event.key.toLowerCase() === "z") {
-        event.preventDefault();
-        if (event.shiftKey) redo();
-        else undo();
-        return;
-      }
-      if (meta && event.key.toLowerCase() === "y") {
-        event.preventDefault();
-        redo();
-        return;
+      if (meta) {
+        switch (event.key.toLowerCase()) {
+          case "z":
+            event.preventDefault();
+            if (event.shiftKey) redo();
+            else undo();
+            return;
+          case "y":
+            event.preventDefault();
+            redo();
+            return;
+          case "s":
+            event.preventDefault();
+            void (event.shiftKey ? saveProjectAs() : saveProject());
+            return;
+          case "o":
+            event.preventDefault();
+            void (async () => {
+              if (await confirmDiscard("Open another project")) await openProjectFile();
+            })();
+            return;
+          case "n":
+            event.preventDefault();
+            void (async () => {
+              if (await confirmDiscard("Start a new project")) {
+                useStudio.getState().resetToDefault();
+              }
+            })();
+            return;
+          default:
+            break;
+        }
       }
 
       if (typing) {

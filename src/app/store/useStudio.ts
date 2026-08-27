@@ -76,6 +76,16 @@ export type StudioState = {
   /** Repairs reported by the loader, shown once then dismissed. */
   readonly notices: readonly string[];
   readonly savedAt: number | null;
+  /** Where this project lives on disk. Desktop only; the browser has no path. */
+  readonly filePath: string | null;
+  /**
+   * The spec as it was last written to or read from that file.
+   *
+   * Specs are immutable and replaced wholesale on every edit, so comparing references is
+   * all "has this changed since it was saved" needs — no deep compare, no dirty flag to
+   * keep in step with the edits.
+   */
+  readonly cleanSpec: WardrobeSpec;
 
   readonly setMode: (mode: Mode) => void;
   readonly setValue: (path: Path, value: unknown) => void;
@@ -102,15 +112,19 @@ export type StudioState = {
   readonly addNotices: (notices: readonly string[]) => void;
   readonly dismissNotices: () => void;
   readonly markSaved: (at: number) => void;
+  /** Records that the current spec is now what sits in `path`. */
+  readonly markFile: (path: string | null) => void;
 };
 
 /** Parameter groups that start open: the ones nearly every design touches. */
 const INITIAL_GROUPS = ["carcase-size", "layout", "doors"];
 
+const INITIAL_SPEC = createDefaultSpec();
+
 export const useStudio = create<StudioState>()(
   temporal(
     (set, get) => ({
-      spec: createDefaultSpec(),
+      spec: INITIAL_SPEC,
       mode: "design",
       view: DEFAULT_VIEW,
       selectedPartId: null,
@@ -122,6 +136,8 @@ export const useStudio = create<StudioState>()(
       selectedBayId: null,
       notices: [],
       savedAt: null,
+      filePath: null,
+      cleanSpec: INITIAL_SPEC,
 
       setMode: (mode) => set({ mode }),
 
@@ -134,7 +150,9 @@ export const useStudio = create<StudioState>()(
       /* The way out of a design the engine cannot solve. Selections are cleared with
          it, since they point at parts that are about to stop existing. */
       resetToDefault: () => {
-        get().setSpec(createDefaultSpec(), ["Started again from the default wardrobe."]);
+        const spec = createDefaultSpec();
+        get().setSpec(spec, ["Started again from the default wardrobe."]);
+        set({ filePath: null, cleanSpec: spec });
         clearHistory();
       },
 
@@ -142,6 +160,9 @@ export const useStudio = create<StudioState>()(
          the design you just abandoned produces something nobody asked for. */
       loadPreset: (spec, name) => {
         get().setSpec(spec, [`Loaded the “${name}” preset. Undo history was cleared.`]);
+        /* A preset is a starting point, not a document: it has no file of its own, and
+           saving it must not overwrite whatever was open before. */
+        set({ filePath: null, cleanSpec: spec });
         clearHistory();
       },
 
@@ -154,6 +175,9 @@ export const useStudio = create<StudioState>()(
             return { ok: false, notices: result.fatal };
           }
           get().setSpec(result.spec, result.repairs);
+          /* Loading does not know where the text came from — the caller records the path
+             afterwards with markFile — so until then this is an unsaved project. */
+          set({ filePath: null, cleanSpec: result.spec });
           /* A different project is a different history. Without this, undo walks back
              into the previous one and produces a design that was never opened. */
           clearHistory();
@@ -230,6 +254,8 @@ export const useStudio = create<StudioState>()(
       dismissNotices: () => set({ notices: [] }),
 
       markSaved: (savedAt) => set({ savedAt }),
+
+      markFile: (filePath) => set((state) => ({ filePath, cleanSpec: state.spec })),
     }),
     {
       /* Only the spec is undoable. Undoing a camera move or a mode switch would be

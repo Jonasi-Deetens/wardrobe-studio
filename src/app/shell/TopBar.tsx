@@ -8,14 +8,16 @@ import {
   MoreHorizontal,
   Redo2,
   Save,
+  Share2,
   Sliders,
   Sparkles,
   Undo2,
   X,
 } from "lucide-react";
-import { useRef } from "react";
 import { PRESETS } from "@/engine/spec/presets";
 import { cn } from "@/lib/cn";
+import { canShareLink } from "../lib/platform";
+import { confirmDiscard, openProjectFile, saveProject, saveProjectAs } from "../lib/project";
 import { useDerived } from "../store/derived";
 import { MODES, redo, undo, useStudio, useTemporal } from "../store/useStudio";
 import { Button, Tooltip } from "../ui";
@@ -30,12 +32,10 @@ import { Button, Tooltip } from "../ui";
  * drawer buttons, undo and a menu.
  */
 export function TopBar({
-  onSave,
   onCopyLink,
   onOpenParameters,
   onOpenSummary,
 }: {
-  readonly onSave: () => void;
   readonly onCopyLink: () => void;
   /** Opens the parameters drawer; only shown when the panel is not beside the work. */
   readonly onOpenParameters: () => void;
@@ -46,27 +46,22 @@ export function TopBar({
   const name = useStudio((state) => state.spec.meta.name);
   const setValue = useStudio((state) => state.setValue);
   const loadPreset = useStudio((state) => state.loadPreset);
-  const loadJson = useStudio((state) => state.loadJson);
-  const addNotices = useStudio((state) => state.addNotices);
   const savedAt = useStudio((state) => state.savedAt);
+  const filePath = useStudio((state) => state.filePath);
+  const dirty = useStudio((state) => state.spec !== state.cleanSpec);
   const { summary, elapsedMs } = useDerived();
 
   const canUndo = useTemporal((state) => state.pastStates.length > 0);
   const canRedo = useTemporal((state) => state.futureStates.length > 0);
-  const fileInput = useRef<HTMLInputElement>(null);
 
-  const openFile = (file: File): void => {
-    void file.text().then(
-      (text) => {
-        // loadJson reports its own repairs and clears the undo history.
-        loadJson(text);
-      },
-      (error: unknown) => {
-        addNotices([
-          `Could not read “${file.name}”: ${error instanceof Error ? error.message : "the file could not be opened"}.`,
-        ]);
-      },
-    );
+  const open = (): void => {
+    void (async () => {
+      if (await confirmDiscard("Open another project")) await openProjectFile();
+    })();
+  };
+
+  const save = (): void => {
+    void saveProject();
   };
 
   const status =
@@ -220,33 +215,55 @@ export function TopBar({
           <div className="hidden items-center gap-1 sm:flex">
             {presets}
 
-            <Tooltip content="Open a project JSON file">
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={() => fileInput.current?.click()}
-                aria-label="Open project"
-              >
+            <Tooltip content="Open a project file (Ctrl+O)">
+              <Button variant="ghost" size="icon-sm" onClick={open} aria-label="Open project">
                 <FolderOpen className="size-3.5" />
               </Button>
             </Tooltip>
 
-            <Tooltip content="Save as JSON">
-              <Button variant="ghost" size="icon-sm" onClick={onSave} aria-label="Save project">
-                <Save className="size-3.5" />
-              </Button>
-            </Tooltip>
-
-            <Tooltip content="Copy a link that carries the whole design">
+            <Tooltip content={saveHint(filePath, dirty)}>
               <Button
                 variant="ghost"
                 size="icon-sm"
-                onClick={onCopyLink}
-                aria-label="Copy share link"
+                onClick={save}
+                aria-label="Save project"
+                className="relative"
               >
-                <Link2 className="size-3.5" />
+                <Save className="size-3.5" />
+                {dirty ? (
+                  <span
+                    className="absolute top-1 right-1 size-1.5 rounded-full bg-accent"
+                    aria-hidden
+                  />
+                ) : null}
               </Button>
             </Tooltip>
+
+            {/* A link only means something if there is a web address to point it at. In a
+                desktop build with none configured, sending the file is the honest option. */}
+            {canShareLink() ? (
+              <Tooltip content="Copy a link that carries the whole design">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={onCopyLink}
+                  aria-label="Copy share link"
+                >
+                  <Link2 className="size-3.5" />
+                </Button>
+              </Tooltip>
+            ) : (
+              <Tooltip content="Write a copy of the project to send to someone">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={() => void saveProjectAs()}
+                  aria-label="Save a copy"
+                >
+                  <Share2 className="size-3.5" />
+                </Button>
+              </Tooltip>
+            )}
           </div>
 
           <DropdownMenu.Root>
@@ -265,18 +282,24 @@ export function TopBar({
                 <MenuItem icon={<Redo2 className="size-4" />} onSelect={redo} disabled={!canRedo}>
                   Redo
                 </MenuItem>
-                <MenuItem icon={<Save className="size-4" />} onSelect={onSave}>
-                  Save project file
+                <MenuItem icon={<Save className="size-4" />} onSelect={save}>
+                  Save project
                 </MenuItem>
-                <MenuItem
-                  icon={<FolderOpen className="size-4" />}
-                  onSelect={() => fileInput.current?.click()}
-                >
-                  Open project file
+                <MenuItem icon={<Save className="size-4" />} onSelect={() => void saveProjectAs()}>
+                  Save project as…
                 </MenuItem>
-                <MenuItem icon={<Link2 className="size-4" />} onSelect={onCopyLink}>
-                  Copy share link
+                <MenuItem icon={<FolderOpen className="size-4" />} onSelect={open}>
+                  Open project…
                 </MenuItem>
+                {canShareLink() ? (
+                  <MenuItem icon={<Link2 className="size-4" />} onSelect={onCopyLink}>
+                    Copy share link
+                  </MenuItem>
+                ) : (
+                  <MenuItem icon={<Share2 className="size-4" />} onSelect={() => void saveProjectAs()}>
+                    Save a copy to send
+                  </MenuItem>
+                )}
                 <DropdownMenu.Separator className="my-1 h-px bg-line" />
                 <DropdownMenu.Label className="px-2 py-1.5 text-[10.5px] tracking-wide text-faint uppercase">
                   Presets
@@ -293,18 +316,6 @@ export function TopBar({
               </DropdownMenu.Content>
             </DropdownMenu.Portal>
           </DropdownMenu.Root>
-
-          <input
-            ref={fileInput}
-            type="file"
-            accept="application/json,.json"
-            className="hidden"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) openFile(file);
-              event.target.value = "";
-            }}
-          />
 
           <Button
             variant="ghost"
@@ -366,6 +377,11 @@ export function ModeBar() {
       ))}
     </nav>
   );
+}
+
+function saveHint(filePath: string | null, dirty: boolean): string {
+  if (!filePath) return "Save the project to a file (Ctrl+S)";
+  return dirty ? `Unsaved changes · save to ${filePath} (Ctrl+S)` : `Saved to ${filePath}`;
 }
 
 function MenuItem({

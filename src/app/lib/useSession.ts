@@ -53,6 +53,9 @@ export function useSession(): { readonly restored: boolean } {
           "Opened from a shared link.",
           ...fromHash.load.repairs,
         ]);
+        /* Arriving from a link is not an edit. Without this the app would open showing
+           unsaved changes and, on the desktop, ask about them on the way out. */
+        useStudio.getState().markFile(null);
         clearHistory();
         setRestored(true);
         return;

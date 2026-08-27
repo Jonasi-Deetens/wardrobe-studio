@@ -1,0 +1,41 @@
+[package]
+name = "wardrobe-studio"
+version = "0.1.0"
+description = "Parametric wardrobe configurator with shop-ready output"
+authors = ["Wardrobe Studio"]
+license = ""
+repository = ""
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+# The desktop binary links the rlib; the staticlib and cdylib are what a mobile target would
+# need, and cost nothing to keep.
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.11.3", features = [] }
+tauri-plugin-log = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-clipboard-manager = "2"
+
+[target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
+tauri-plugin-single-instance = "2"
+
+[profile.release]
+# The whole point of the desktop build is a small self-contained binary; these are the
+# standard Tauri release settings and they roughly halve it.
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

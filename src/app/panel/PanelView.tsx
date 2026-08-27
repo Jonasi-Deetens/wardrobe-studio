@@ -3,9 +3,10 @@ import { useMemo } from "react";
 import { getMaterial } from "@/engine/catalog/materials";
 import { OP_PURPOSE_LABELS, PART_ROLE_LABELS, toolList, type Part } from "@/engine/core/part";
 import { renderPanelDrawing } from "@/engine/drawing/panel";
+import { drawingToSvg, PRINT_THEME } from "@/engine/drawing/svg";
 import { partToDxf } from "@/engine/export/dxf";
 import { cn } from "@/lib/cn";
-import { downloadText } from "../lib/download";
+import { canPrintInPlace, revealFile, saveFile } from "../lib/platform";
 import { useBelow } from "../lib/useMediaQuery";
 import { DrawingCanvas } from "../drawing/DrawingCanvas";
 import { useDerived } from "../store/derived";
@@ -27,6 +28,7 @@ export function PanelView() {
   const face = useStudio((state) => state.selectedFace);
   const setFace = useStudio((state) => state.setFace);
   const hoverParts = useStudio((state) => state.hoverParts);
+  const addNotices = useStudio((state) => state.addNotices);
   const stacked = useBelow("lg");
 
   const machined = useMemo(
@@ -54,6 +56,46 @@ export function PanelView() {
   const hasFaceB = part.ops.some(
     (op) => (op.kind === "hole" || op.kind === "groove") && op.face === "B",
   );
+
+  const saveDxf = () => {
+    void (async () => {
+      const outcome = await saveFile({
+        suggestedName: `${slug(part.label)}-face-${face}.dxf`,
+        kind: "dxf",
+        contents: partToDxf(part, face),
+      });
+      if (outcome.kind === "failed") addNotices([`Could not save the DXF: ${outcome.reason}`]);
+    })();
+  };
+
+  /**
+   * Print, or the closest thing the webview can do.
+   *
+   * WKWebView has no `window.print()` and WebKitGTK's is unreliable, so on the desktop the
+   * drawing is written out as a print-themed SVG — the same renderer the screen and the PDF
+   * use — and the folder is opened so it can be printed from the OS viewer.
+   */
+  const printSheet = () => {
+    if (canPrintInPlace()) {
+      window.print();
+      return;
+    }
+    void (async () => {
+      const outcome = await saveFile({
+        suggestedName: `${slug(part.label)}-face-${face}.svg`,
+        kind: "svg",
+        contents: drawingToSvg(drawing, { theme: PRINT_THEME }),
+      });
+      if (outcome.kind === "failed") {
+        addNotices([`Could not write the print sheet: ${outcome.reason}`]);
+        return;
+      }
+      if (outcome.kind === "saved" && outcome.path) {
+        addNotices(["Print sheet saved. Opening the folder so you can print it."]);
+        void revealFile(outcome.path);
+      }
+    })();
+  };
 
   /* A 220px list next to a phone-width drawing leaves nothing for the drawing, and the
      drawing is the whole point of this view. The list collapses to a picker instead. */
@@ -109,14 +151,8 @@ export function PanelView() {
               variant="outline"
               size="icon"
               className="size-9 shrink-0"
-              aria-label="Download this panel as DXF"
-              onClick={() =>
-                downloadText(
-                  `${slug(part.label)}-face-${face}.dxf`,
-                  partToDxf(part, face),
-                  "application/dxf",
-                )
-              }
+              aria-label="Save this panel as DXF"
+              onClick={saveDxf}
             >
               <Download className="size-4" />
             </Button>
@@ -223,24 +259,14 @@ export function PanelView() {
                 },
               ]}
             />
-            <Tooltip content="Download this panel as DXF">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() =>
-                  downloadText(
-                    `${slug(part.label)}-face-${face}.dxf`,
-                    partToDxf(part, face),
-                    "application/dxf",
-                  )
-                }
-              >
+            <Tooltip content="Save this panel as DXF">
+              <Button variant="outline" size="sm" onClick={saveDxf}>
                 <Download className="size-3.5" />
                 DXF
               </Button>
             </Tooltip>
-            <Tooltip content="Print this drawing">
-              <Button variant="ghost" size="icon-sm" onClick={() => window.print()} aria-label="Print">
+            <Tooltip content={PRINT_HINT}>
+              <Button variant="ghost" size="icon-sm" onClick={printSheet} aria-label="Print">
                 <Printer className="size-3.5" />
               </Button>
             </Tooltip>
@@ -342,6 +368,10 @@ function MachiningList({ part }: { readonly part: Part }) {
     </>
   );
 }
+
+const PRINT_HINT = canPrintInPlace()
+  ? "Print this drawing"
+  : "Save this drawing as a print-ready sheet and open the folder";
 
 function slug(label: string): string {
   return label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");

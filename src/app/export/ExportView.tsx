@@ -4,6 +4,7 @@ import {
   FileCode2,
   FileSpreadsheet,
   FileText,
+  FolderOpen,
   Loader2,
   Ruler,
 } from "lucide-react";
@@ -12,7 +13,7 @@ import { buildAssemblySequence } from "@/engine/assembly";
 import { bomToCsv, cutListToCsv, drillingToCsv, nestingToCsv } from "@/engine/export/csv";
 import { serialiseSpec } from "@/engine/spec/migrate";
 import { cn } from "@/lib/cn";
-import { downloadBytes, downloadCsv, downloadText } from "../lib/download";
+import { canReveal, isDesktop, revealFile, saveFile, type SaveOutcome } from "../lib/platform";
 import { useNesting } from "../nesting/useNesting";
 import { useDerived } from "../store/derived";
 import { useStudio } from "../store/useStudio";
@@ -28,7 +29,12 @@ import { useExportWorker } from "./useExportWorker";
  * only need one. DXF carries the holes on layers named by diameter, which is what CAM
  * software wants: one tool per layer.
  */
-type Outcome = { readonly done?: string; readonly caveat?: string };
+type Outcome = {
+  readonly done?: string;
+  readonly caveat?: string;
+  readonly path?: string | null;
+  readonly cancelled?: boolean;
+};
 
 export function ExportView() {
   const { model, cutList, assembly } = useDerived();
@@ -38,6 +44,8 @@ export function ExportView() {
 
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  /* Where the last export landed, so the desktop build can offer to show it. */
+  const [savedPath, setSavedPath] = useState<string | null>(null);
   const [options, setOptions] = useState({
     cuttingDiagrams: true,
     panelPages: true,
@@ -47,6 +55,9 @@ export function ExportView() {
   });
 
   const name = slug(spec.meta.name || "wardrobe");
+  /* A desktop app asks where to put the file; a browser drops it in Downloads. The button
+     should say which of those is about to happen. */
+  const verb = isDesktop() ? "Save" : "Download";
 
   /**
    * Runs an export and reports what happened.
@@ -59,17 +70,35 @@ export function ExportView() {
   const run = async (id: string, task: () => Promise<Outcome | void>, done: string) => {
     setBusy(id);
     setMessage(null);
+    setSavedPath(null);
     try {
       /* Let the button paint its spinner before the build starts. */
       await new Promise((resolve) => requestAnimationFrame(resolve));
       const outcome = (await task()) ?? {};
+      if (outcome.cancelled) {
+        setMessage(null);
+        return;
+      }
       const headline = outcome.done ?? done;
       setMessage(outcome.caveat ? `${headline} But ${outcome.caveat}` : headline);
+      setSavedPath(outcome.path ?? null);
     } catch (error) {
       setMessage(error instanceof Error ? `Failed: ${error.message}` : "Export failed");
     } finally {
       setBusy(null);
     }
+  };
+
+  /**
+   * Turns a save outcome into something `run` can report.
+   *
+   * A cancelled dialog is not a failure and must not be announced as one — the user pressed
+   * Escape and knows perfectly well what happened.
+   */
+  const report = (outcome: SaveOutcome): Outcome => {
+    if (outcome.kind === "cancelled") return { cancelled: true };
+    if (outcome.kind === "failed") throw new Error(outcome.reason);
+    return { path: outcome.path };
   };
 
   const booklet = () =>
@@ -93,10 +122,16 @@ export function ExportView() {
             assembly: options.assembly,
           },
         });
-        downloadBytes(`${name}-booklet.pdf`, result.bytes, "application/pdf");
-        return { caveat: capture.problem ?? undefined };
+        const saved = report(
+          await saveFile({
+            suggestedName: `${name}-booklet.pdf`,
+            kind: "pdf",
+            contents: result.bytes,
+          }),
+        );
+        return { ...saved, caveat: capture.problem ?? undefined };
       },
-      "Booklet downloaded.",
+      "Booklet saved.",
     );
 
   const dxfArchive = () =>
@@ -104,10 +139,24 @@ export function ExportView() {
       "dxf",
       async () => {
         const result = await runExport({ kind: "dxf", spec });
-        downloadBytes(`${name}-dxf.zip`, result.bytes, "application/zip");
-        return { done: `${result.fileCount} DXF files archived.` };
+        const saved = report(
+          await saveFile({
+            suggestedName: `${name}-dxf.zip`,
+            kind: "zip",
+            contents: result.bytes,
+          }),
+        );
+        return { ...saved, done: `${result.fileCount} DXF files archived.` };
       },
       "DXF files archived.",
+    );
+
+  /** The CSVs are cheap to build, so the only slow part is the user choosing a folder. */
+  const saveCsv = (id: string, filename: string, csv: string, done: string) =>
+    run(
+      id,
+      async () => report(await saveFile({ suggestedName: filename, kind: "csv", contents: csv })),
+      done,
     );
 
   const sheetCount = cutList.materialTotals.reduce((sum, total) => sum + total.sheetsNeeded, 0);
@@ -193,7 +242,7 @@ export function ExportView() {
                 ) : (
                   <FileArchive className="size-3.5" />
                 )}
-                Download ZIP
+                {verb} ZIP
               </Button>
             }
           />
@@ -206,10 +255,13 @@ export function ExportView() {
               <Button
                 variant="default"
                 size="sm"
-                onClick={() => downloadCsv(`${name}-cutlist.csv`, cutListToCsv(cutList))}
+                disabled={busy !== null}
+                onClick={() =>
+                  saveCsv("cutlist", `${name}-cutlist.csv`, cutListToCsv(cutList), "Cut list saved.")
+                }
               >
                 <FileSpreadsheet className="size-3.5" />
-                Download
+                {verb}
               </Button>
             }
           />
@@ -222,10 +274,13 @@ export function ExportView() {
               <Button
                 variant="default"
                 size="sm"
-                onClick={() => downloadCsv(`${name}-hardware.csv`, bomToCsv(cutList))}
+                disabled={busy !== null}
+                onClick={() =>
+                  saveCsv("bom", `${name}-hardware.csv`, bomToCsv(cutList), "Hardware list saved.")
+                }
               >
                 <FileSpreadsheet className="size-3.5" />
-                Download
+                {verb}
               </Button>
             }
           />
@@ -238,10 +293,18 @@ export function ExportView() {
               <Button
                 variant="default"
                 size="sm"
-                onClick={() => downloadCsv(`${name}-drilling.csv`, drillingToCsv(model.parts))}
+                disabled={busy !== null}
+                onClick={() =>
+                  saveCsv(
+                    "drilling",
+                    `${name}-drilling.csv`,
+                    drillingToCsv(model.parts),
+                    "Drilling coordinates saved.",
+                  )
+                }
               >
                 <FileSpreadsheet className="size-3.5" />
-                Download
+                {verb}
               </Button>
             }
           />
@@ -254,13 +317,19 @@ export function ExportView() {
               <Button
                 variant="default"
                 size="sm"
-                disabled={!nesting.result}
+                disabled={!nesting.result || busy !== null}
                 onClick={() =>
-                  nesting.result && downloadCsv(`${name}-nesting.csv`, nestingToCsv(nesting.result))
+                  nesting.result &&
+                  saveCsv(
+                    "nesting",
+                    `${name}-nesting.csv`,
+                    nestingToCsv(nesting.result),
+                    "Nesting saved.",
+                  )
                 }
               >
                 <FileSpreadsheet className="size-3.5" />
-                Download
+                {verb}
               </Button>
             }
           />
@@ -273,19 +342,33 @@ export function ExportView() {
               <Button
                 variant="default"
                 size="sm"
-                onClick={() => downloadText(`${name}.json`, serialiseSpec(spec), "application/json")}
+                disabled={busy !== null}
+                onClick={() =>
+                  run(
+                    "json",
+                    async () =>
+                      report(
+                        await saveFile({
+                          suggestedName: `${name}.wardrobe`,
+                          kind: "project",
+                          contents: serialiseSpec(spec),
+                        }),
+                      ),
+                    "Project saved.",
+                  )
+                }
               >
                 <FileCode2 className="size-3.5" />
-                Download
+                {verb}
               </Button>
             }
           />
         </div>
 
         {message ? (
-          <p
+          <div
             className={cn(
-              "mt-5 rounded-md border px-3 py-2 text-[12px]",
+              "mt-5 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border px-3 py-2 text-[12px]",
               message.startsWith("Failed")
                 ? "border-error/40 bg-error/[0.08] text-error"
                 : message.includes(" But ")
@@ -294,8 +377,19 @@ export function ExportView() {
             )}
             role="status"
           >
-            {message}
-          </p>
+            <span className="min-w-0 flex-1">{message}</span>
+            {savedPath && canReveal() ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="shrink-0"
+                onClick={() => void revealFile(savedPath)}
+              >
+                <FolderOpen className="size-3.5" />
+                Show in folder
+              </Button>
+            ) : null}
+          </div>
         ) : null}
 
         <section className="mt-8 border-t border-line pt-5">

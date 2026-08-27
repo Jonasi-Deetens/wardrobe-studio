@@ -1,0 +1,20 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What the Wardrobe Studio window is allowed to do: pick a file, read or write that one file, open a finished export in the OS viewer, and use the clipboard.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-title",
+    "core:window:allow-destroy",
+    "dialog:default",
+    "dialog:allow-ask",
+    "dialog:allow-confirm",
+    "clipboard-manager:default",
+    "opener:default",
+    "fs:default",
+    "fs:allow-read-text-file",
+    "fs:allow-write-file",
+    "fs:allow-write-text-file"
+  ]
+}

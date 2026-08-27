@@ -5,7 +5,7 @@ import { renderSheetDrawing } from "@/engine/drawing/sheet";
 import { nestingToCsv } from "@/engine/export/csv";
 import { cn } from "@/lib/cn";
 import { DrawingCanvas } from "../drawing/DrawingCanvas";
-import { downloadCsv } from "../lib/download";
+import { saveFile } from "../lib/platform";
 import { useBelow } from "../lib/useMediaQuery";
 import { useStudio } from "../store/useStudio";
 import { Button, Tooltip } from "../ui";
@@ -21,6 +21,7 @@ import { useNesting } from "./useNesting";
 export function NestingView() {
   const nesting = useNesting();
   const hoverParts = useStudio((state) => state.hoverParts);
+  const addNotices = useStudio((state) => state.addNotices);
   const [sheetIndex, setSheetIndex] = useState(0);
   const stacked = useBelow("lg");
 
@@ -105,9 +106,20 @@ export function NestingView() {
         variant="outline"
         size="sm"
         className="h-8 sm:h-7"
-        onClick={() =>
-          downloadCsv("nesting.csv", nestingToCsv(nesting.result as NonNullable<typeof nesting.result>))
-        }
+        onClick={() => {
+          const result = nesting.result;
+          if (!result) return;
+          void (async () => {
+            const outcome = await saveFile({
+              suggestedName: "nesting.csv",
+              kind: "csv",
+              contents: nestingToCsv(result),
+            });
+            if (outcome.kind === "failed") {
+              addNotices([`Could not save the nesting CSV: ${outcome.reason}`]);
+            }
+          })();
+        }}
       >
         <Download className="size-3.5" />
         CSV
