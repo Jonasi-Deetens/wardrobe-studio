@@ -1,8 +1,8 @@
-import { getShelfSupport } from "../catalog/hardware";
+import { getRail, getShelfSupport } from "../catalog/hardware";
 import type { Hole, PanelFace } from "../core/part";
 import { mm2 } from "../core/units";
 import type { SolverContext } from "../solver/context";
-import { fromFinishedEdge, localOf, type PartDraft } from "../solver/draft";
+import { finishedLength, fromFinishedEdge, localOf, type PartDraft } from "../solver/draft";
 import type { ResolvedAdjustableShelf } from "../solver/fittings";
 import type { ResolvedBay } from "../solver/layout";
 
@@ -76,8 +76,10 @@ export function planSystemRows(
 /**
  * Adds the system hole rows to a vertical panel face.
  *
- * `w0` is the front edge for every vertical panel, so the row offsets are measured
- * from the finished front and back edges.
+ * `w0` is the front edge for every vertical panel and `l0` its bottom edge, so every
+ * offset here is measured from a *finished* edge and converted. Banding on the bottom
+ * edge is uncommon but when it is there the whole row shifts by its thickness, and a
+ * shelf pin a millimetre out of line is a shelf that rocks.
  */
 export function applySystemRows(
   draft: PartDraft,
@@ -96,7 +98,7 @@ export function applySystemRows(
   for (const row of rows) {
     if (row.w < 0 || row.w > draft.width) continue;
     for (let i = 0; i < plan.holeCount; i += 1) {
-      const l = mm2(plan.startOffset + i * plan.pitch);
+      const l = mm2(fromFinishedEdge(draft, "l0", plan.startOffset + i * plan.pitch));
       if (l < 0 || l > draft.length) continue;
       holes.push({
         kind: "hole",
@@ -159,7 +161,7 @@ export function applySystemHoles(
         )
       : faces;
 
-    const plan = planSystemRows(draft.length, {
+    const plan = planSystemRows(finishedLength(draft), {
       frontOffset: config.frontOffset,
       rearOffset: config.rearOffset,
       pitch: config.pitch,
@@ -184,25 +186,98 @@ export function applySystemHoles(
 /**
  * Marks the four holes an adjustable shelf actually rests in.
  *
- * The system rows already exist; this records which of them are in use so the
- * drawing can highlight them and the hardware list can count the pins. Pins are
- * set in from the shelf ends by the same amount the rows are from the panel edges,
- * so the shelf is supported near its corners where it matters.
+ * The rows themselves are drilled all the way up the panel, which tells the person
+ * at the bench nothing about where this shelf goes. So each shelf claims the two
+ * holes per side that carry it, and those holes get a note naming the shelf — the
+ * drawing then shows which four of sixty holes to put pins in.
+ *
+ * `joinery.shelfPinInset` says how far in from the shelf's front and back edges the
+ * pins should be. There are only ever two rows to choose from, so the nearest row to
+ * each target is used and the shelf note says how far off it landed.
  */
 export function markShelfPins(
   ctx: SolverContext,
   shelves: readonly ResolvedAdjustableShelf[],
+  bays: readonly ResolvedBay[],
 ): void {
   const support = getShelfSupport(ctx.spec.joinery.shelfSupportId);
+  const inset = ctx.spec.joinery.shelfPinInset;
   if (shelves.length === 0) return;
 
   for (const shelf of shelves) {
     const draft = ctx.partsById.get(shelf.partId);
     if (!draft) continue;
+    const bay = bays.find((b) => b.id === shelf.bayId);
+
+    let pins = 0;
+    let worstDeviation = 0;
+    for (const boundary of [bay?.bounds.left, bay?.bounds.right]) {
+      if (!boundary) continue;
+      const panel = ctx.partsById.get(boundary.partId);
+      if (!panel) continue;
+
+      /* Pin targets in world space: in from the shelf's own front and back edges,
+         with the rear pin raised by however much the shelf is tilted. */
+      const targets = [
+        { z: mm2(shelf.region.z1 - inset), y: shelf.y },
+        { z: mm2(shelf.region.z0 + inset), y: mm2(shelf.y + shelf.rearRise) },
+      ];
+      for (const point of targets) {
+        const local = localOf(panel, [panel.placement.origin[0], point.y, point.z]);
+        const index = nearestSystemHole(
+          panel,
+          boundary.faceTowardRegion,
+          local.l,
+          local.w,
+        );
+        if (index < 0) continue;
+        const hole = panel.ops[index] as Hole;
+        panel.ops[index] = { ...hole, note: `Shelf pin: ${draft.label}` };
+        pins += 1;
+        worstDeviation = Math.max(worstDeviation, Math.abs(hole.w - local.w));
+      }
+    }
+
+    const height = mm2(shelf.y - ctx.frame.sideBottomY);
+    if (pins === 0) {
+      draft.notes.push(
+        `Rests on Ø${support.holeDiameter} pins ${height}mm above the foot of the side panel. No system rows were drilled next to it, so drill for the pins by hand.`,
+      );
+      continue;
+    }
     draft.notes.push(
-      `Rests on four Ø${support.holeDiameter} pins in the system rows at ${mm2(shelf.y - ctx.frame.sideBottomY)}mm above the foot of the side panel.`,
+      `Rests on ${pins} Ø${support.holeDiameter} pins ${height}mm above the foot of the side panel, in the holes marked with this shelf's name.${
+        worstDeviation > 1
+          ? ` The nearest system row is ${mm2(worstDeviation)}mm off the ${inset}mm pin inset you asked for; the rows are the only holes there are.`
+          : ""
+      }`,
     );
   }
+}
+
+/**
+ * Index of the system hole on one face closest to a target position, or -1. The
+ * search is limited to half a pitch along the panel so a shelf cannot claim a hole
+ * belonging to a different height.
+ */
+function nearestSystemHole(
+  panel: PartDraft,
+  face: PanelFace,
+  l: number,
+  w: number,
+): number {
+  let best = -1;
+  let bestScore = Infinity;
+  panel.ops.forEach((op, index) => {
+    if (op.kind !== "hole" || op.purpose !== "system-hole" || op.face !== face) return;
+    if (Math.abs(op.l - l) > 16) return;
+    const score = Math.abs(op.l - l) + Math.abs(op.w - w);
+    if (score < bestScore) {
+      bestScore = score;
+      best = index;
+    }
+  });
+  return best;
 }
 
 /**
@@ -220,13 +295,22 @@ export function applyRailSupports(
     readonly x1: number;
     readonly span: number;
     readonly needsCentreSupport: boolean;
+    readonly shelfAbovePartId: string | null;
     readonly bayId: string;
   }[],
   bays: readonly ResolvedBay[],
 ): void {
+  let centreSupports = 0;
+  let centreRailId: string | null = null;
+
   for (const rail of rails) {
     const bay = bays.find((b) => b.id === rail.bayId);
     if (!bay) continue;
+
+    if (rail.needsCentreSupport) {
+      centreSupports += drillCentreSupport(ctx, rail);
+      centreRailId ??= rail.railId;
+    }
 
     for (const [side, boundary] of [
       ["left", bay.bounds.left],
@@ -257,6 +341,75 @@ export function applyRailSupports(
       }
     }
   }
+
+  if (centreSupports > 0 && centreRailId !== null) {
+    const rail = getRail(centreRailId);
+    ctx.hardware.push({
+      kind: "rail-centre-support",
+      catalogId: rail.id,
+      name: `Centre support for ${rail.name}`,
+      quantity: centreSupports,
+      unit: "each",
+      unitPrice: rail.pricePerSupport,
+      note: "Screwed up into the shelf over the rail at mid-span.",
+    });
+  }
+}
+
+/**
+ * A centre support for a rail that spans further than it can carry.
+ *
+ * The support screws upwards into the shelf above, so the holes go in the underside
+ * of that shelf — face B, since a shelf's face A looks up. Without a shelf over the
+ * rail there is nothing to fix to, and the advisor says so rather than the hardware
+ * list quietly billing a part that cannot be fitted.
+ */
+function drillCentreSupport(
+  ctx: SolverContext,
+  rail: {
+    readonly id: string;
+    readonly y: number;
+    readonly z: number;
+    readonly x0: number;
+    readonly x1: number;
+    readonly shelfAbovePartId: string | null;
+  },
+): number {
+  if (!rail.shelfAbovePartId) return 0;
+  const shelf = ctx.partsById.get(rail.shelfAbovePartId);
+  if (!shelf) return 0;
+
+  const midX = mm2((rail.x0 + rail.x1) / 2);
+  const local = localOf(shelf, [midX, rail.y, rail.z]);
+  let drilled = 0;
+
+  /* Two screws across the width of the support so it cannot swing on one fixing. */
+  for (const [index, dl] of [-16, 16].entries()) {
+    const l = mm2(local.l + dl);
+    if (l < 0 || l > shelf.length) continue;
+    if (local.w < 0 || local.w > shelf.width) continue;
+    shelf.ops.push({
+      kind: "hole",
+      id: `${rail.id}-centre-support-${index + 1}`,
+      face: "B",
+      l,
+      w: mm2(local.w),
+      diameter: 5,
+      depth: 13,
+      through: false,
+      purpose: "rail-support",
+      note: "Hanging rail centre support, screwed up into the underside of this shelf",
+    });
+    drilled += 1;
+  }
+
+  if (drilled > 0) {
+    shelf.notes.push(
+      "Carries a centre support for the rail below; the two holes in the underside are at mid-span.",
+    );
+    return 1;
+  }
+  return 0;
 }
 
 /**

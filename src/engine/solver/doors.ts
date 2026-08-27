@@ -32,10 +32,19 @@ export type ResolvedLeaf = {
   readonly overlay: number;
 };
 
+/** A leaf that could not be built, so the advisor can say why rather than it vanishing. */
+export type ImpossibleLeaf = {
+  readonly index: number;
+  readonly width: number;
+  readonly height: number;
+};
+
 export type DoorsResult = {
   readonly leaves: readonly ResolvedLeaf[];
   /** Overlay achieved by the chosen boring distance and plate height. */
   readonly overlay: number;
+  /** Leaves the gaps and reveals left no room for. */
+  readonly impossible: readonly ImpossibleLeaf[];
 };
 
 /**
@@ -102,7 +111,7 @@ export function buildDoors(
   dividerIdByX: ReadonlyMap<number, string>,
 ): DoorsResult {
   const { spec, frame } = ctx;
-  if (spec.doors.type === "none") return { leaves: [], overlay: 0 };
+  if (spec.doors.type === "none") return { leaves: [], overlay: 0, impossible: [] };
 
   const hinge = getHinge(spec.doors.hingeId);
   const material = getMaterial(spec.doors.materialId);
@@ -137,6 +146,7 @@ export function buildDoors(
   const leafCount = boundaries.length - 1;
   const sides = hingeSides(spec.doors.hingeSideRule, leafCount);
   const leaves: ResolvedLeaf[] = [];
+  const impossible: ImpossibleLeaf[] = [];
 
   for (let i = 0; i < leafCount; i += 1) {
     const spanStart = boundaries[i] as number;
@@ -156,7 +166,12 @@ export function buildDoors(
     const y0 = mm2(frontBottomY + spec.doors.revealBottom + (inset ? t + gap : 0));
     const y1 = mm2(frontTopY - spec.doors.revealTop - (inset ? t + gap : 0));
     const height = mm2(y1 - y0);
-    if (width <= 0 || height <= 0) continue;
+    if (width <= 0 || height <= 0) {
+      // The gaps, reveals and inset allowances have eaten the whole opening. Record
+      // it so the advisor can name the parameter instead of a leaf just missing.
+      impossible.push({ index: i + 1, width, height });
+      continue;
+    }
 
     const hingeSide = sides[i] ?? "left";
     const hingeCount =
@@ -252,7 +267,7 @@ export function buildDoors(
     });
   }
 
-  return { leaves, overlay };
+  return { leaves, overlay, impossible };
 }
 
 /** Which carcase panel sits at a given X: an outer side, or a divider. */

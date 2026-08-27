@@ -16,6 +16,11 @@ import type { ResolvedBay } from "../solver/layout";
  * - a Ø6mm hole in the drawer bottom for the locking device, 11mm from the front;
  * - a notch in the back of the drawer bottom for the rear hook.
  *
+ * A side-mount runner is two pieces instead of one: a cabinet member on the carcase
+ * panel, drilled the same way, plus a drawer member screwed to the outside of each
+ * drawer side. Without that second set of holes the runner has nothing to attach to,
+ * so the box would be billed a pair of runners it could not be fitted with.
+ *
  * The runner also fixes the box width: the inside width is the opening less the
  * runner clearance (49mm for a pair of undermounts with 19mm sides) and less the two
  * box sides. That relation is applied in the solver, where the box is built; this
@@ -41,9 +46,66 @@ export function applyDrawerHardware(
       drillRunnerFixings(ctx, panel, boundary.faceTowardRegion, drawer, slide, side);
     }
 
+    if (slide.mount === "side-mount") {
+      drillDrawerSideRunners(ctx, drawer, slide);
+    }
+
     drillBottom(ctx, drawer, slide);
     if (drawer.hasFront && drawer.frontPartId) {
       drillFrontFixings(ctx, drawer);
+    }
+  }
+}
+
+/**
+ * The drawer half of a side-mount runner, on the outside face of each box side.
+ *
+ * The screw line has to end up level with the cabinet member, which sits
+ * `firstFixingHeight` above the bottom of the opening while the box floor sits
+ * `bottomClearance` above it — so the difference is how far up the drawer side the
+ * runner lands. Face B is the outside of a box side, since face A looks into the box.
+ */
+function drillDrawerSideRunners(
+  ctx: SolverContext,
+  drawer: ResolvedDrawer,
+  slide: ReturnType<typeof getSlide>,
+): void {
+  const w = mm2(slide.firstFixingHeight - slide.bottomClearance);
+
+  for (const side of ["left", "right"] as const) {
+    const panel = ctx.partsById.get(`${drawer.id}-side-${side}`);
+    if (!panel) continue;
+    if (w < 0 || w > panel.width) continue;
+
+    /* Front, back and as many intermediate screws as the runner is long enough for. */
+    const count = Math.max(2, Math.floor(panel.length / (slide.fixingSpacing * 2)));
+    const first = mm2(slide.fixingSpacing);
+    const last = mm2(panel.length - slide.fixingSpacing);
+    const step = count > 1 ? (last - first) / (count - 1) : 0;
+
+    let drilled = 0;
+    for (let i = 0; i < count; i += 1) {
+      const l = mm2(first + step * i);
+      if (l < 0 || l > panel.length) continue;
+      panel.ops.push({
+        kind: "hole",
+        id: `${drawer.id}-runner-drawer-${side}-${i + 1}`,
+        face: "B",
+        l,
+        w,
+        diameter: slide.fixingHoleDiameter,
+        depth: slide.fixingHoleDepth,
+        through: false,
+        purpose: "slide-fixing",
+        note: `Drawer member of the ${side} runner`,
+      });
+      drilled += 1;
+    }
+
+    if (drilled > 0) {
+      panel.notes.push(
+        `Side-mount runner screwed to the outside face, ${w}mm above the box floor with ${drilled} fixings.`,
+      );
     }
   }
 }

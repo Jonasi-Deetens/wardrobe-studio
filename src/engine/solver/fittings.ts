@@ -1,6 +1,6 @@
 import { getRail, getShelfSupport, getSlide, slideLengthForDepth } from "../catalog/hardware";
 import { getMaterial } from "../catalog/materials";
-import { mm2, snap, snapDown } from "../core/units";
+import { mm2, snapDown } from "../core/units";
 import type { DrawersFitting, HangingFitting, ShelvesFitting, ShoeRackFitting, PulloutFitting } from "../spec/types";
 import { addHardware, addPart, type SolverContext } from "./context";
 import { makePanel, type PartDraft } from "./draft";
@@ -37,6 +37,11 @@ export type ResolvedAdjustableShelf = {
   readonly bayId: string;
   /** Y of the underside of the shelf. */
   readonly y: number;
+  /**
+   * How much higher the rear pins sit than the front pins, which is what tilts a
+   * shoe shelf. Zero for a level shelf.
+   */
+  readonly rearRise: number;
   readonly region: Region;
 };
 
@@ -59,6 +64,8 @@ export type ResolvedRail = {
   readonly x1: number;
   readonly span: number;
   readonly needsCentreSupport: boolean;
+  /** The shelf a centre support screws up into, when there is one. */
+  readonly shelfAbovePartId: string | null;
   readonly region: Region;
 };
 
@@ -169,7 +176,7 @@ function buildShelves(
       adjustable: fitting.adjustable,
     });
     if (fitting.adjustable) {
-      out.push({ partId: shelf.id, bayId: bay.id, y, region: bay.region });
+      out.push({ partId: shelf.id, bayId: bay.id, y, rearRise: 0, region: bay.region });
     }
   });
 
@@ -267,7 +274,13 @@ function buildHanging(
           setback,
           adjustable: true,
         });
-        shelvesOut.push({ partId: extra.id, bayId: bay.id, y, region: bay.region });
+        shelvesOut.push({
+          partId: extra.id,
+          bayId: bay.id,
+          y,
+          rearRise: 0,
+          region: bay.region,
+        });
       }
       const support = getShelfSupport(ctx.spec.joinery.shelfSupportId);
       addHardware(ctx, {
@@ -295,6 +308,7 @@ function buildHanging(
       x1: bay.region.x1,
       span: mm2(span),
       needsCentreSupport,
+      shelfAbovePartId: shelfAboveId,
       region: bay.region,
     });
     addHardware(ctx, {
@@ -315,17 +329,8 @@ function buildHanging(
       unitPrice: rail.pricePerSupport,
       note: `${bay.label}: ${note}.`,
     });
-    if (needsCentreSupport) {
-      addHardware(ctx, {
-        kind: "rail-centre-support",
-        catalogId: rail.id,
-        name: `Centre support for ${rail.name}`,
-        quantity: 1,
-        unit: "each",
-        unitPrice: rail.pricePerSupport,
-        note: `${bay.label}: the ${mm2(span)}mm span exceeds the ${rail.maxSpan}mm limit for this rail.`,
-      });
-    }
+    /* The centre support is billed by the rule that drills it, in system32.ts, so a
+       support can never appear on the hardware list without holes to receive it. */
   };
 
   addRail(`${bay.id}-rail-upper`, upperRailY, fitting.doubleHang ? "upper rail" : "rail");
@@ -411,9 +416,12 @@ function buildDrawers(
       y1: mm2(cursorY + openingHeight),
     };
 
-    // The box has to clear the runner below and leave room to lift out above.
+    /* The box has to clear the runner below and leave room to lift out above. It is
+       never allowed to exceed that, however small the opening: a box taller than its
+       opening would collide with the drawer above. The advisor reports a box that has
+       been squeezed, and warns outright when the result is too shallow to use. */
     const maxBoxHeight = mm2(openingHeight - slide.bottomClearance - slide.topClearance);
-    const boxHeight = Math.max(60, Math.min(spec.drawers.boxHeight, maxBoxHeight));
+    const boxHeight = mm2(Math.max(1, Math.min(spec.drawers.boxHeight, maxBoxHeight)));
     const boxBottomY = mm2(opening.y0 + slide.bottomClearance);
     const boxFrontZ = mm2(bay.region.z1 - slide.frontSetback);
     const boxRearZ = mm2(boxFrontZ - slideLength);
@@ -626,11 +634,22 @@ function buildShoeRack(
     (bay.clearHeight - thickness) / Math.max(1, fitting.tiers),
   );
 
+  /* The tilt is made by sitting the rear pins in a higher hole, so it can only come
+     in whole steps of the hole pitch. The requested angle is snapped to the nearest
+     achievable one and the note says what it actually works out at, because a shop
+     cannot drill between the holes. */
+  const shelfDepth = mm2(Math.min(bay.clearDepth - 5, 350));
+  const gridPitch = ctx.spec.joinery.systemHoles.pitch;
+  const wantedRise = Math.tan((fitting.tilt * Math.PI) / 180) * shelfDepth;
+  const steps = fitting.tilt > 0 ? Math.max(1, Math.round(wantedRise / gridPitch)) : 0;
+  const rise = mm2(steps * gridPitch);
+  const achievedTilt = mm2((Math.atan(rise / shelfDepth) * 180) / Math.PI);
+
+  let built = 0;
   for (let i = 0; i < fitting.tiers; i += 1) {
     const y = mm2(bay.region.y0 + pitch * (i + 1));
-    if (y + thickness > bay.region.y1) break;
-    // A tilted rack keeps shoes from sliding off and shows the toes; the tilt is
-    // achieved with a deeper rear pin hole, so the shelf itself is a plain panel.
+    // The rear of a tilted shelf sits higher, so it is the rear that runs out of bay.
+    if (y + rise + thickness > bay.region.y1) break;
     const shelf = makePanel({
       id: `${bay.id}-shoe-${i + 1}`,
       role: "shoe-shelf",
@@ -639,7 +658,7 @@ function buildShoeRack(
       thickness,
       orientation: "horizontal-y",
       finishedLength: mm2(bay.clearWidth - 1),
-      finishedWidth: mm2(Math.min(bay.clearDepth - 5, 350)),
+      finishedWidth: shelfDepth,
       origin: [mm2(bay.region.x0 + 0.5), y, mm2(bay.region.z1 - 5)],
       faceADirection: 1,
       grain: getMaterial(materialId).hasGrain ? "length" : "none",
@@ -649,20 +668,26 @@ function buildShoeRack(
       },
       bayId: bay.id,
       notes:
-        fitting.tilt > 0
-          ? [`Tilted ${fitting.tilt} degrees: set the rear pins ${mm2(Math.tan((fitting.tilt * Math.PI) / 180) * Math.min(bay.clearDepth - 5, 350))}mm higher than the front pins.`]
+        steps > 0
+          ? [
+              `Tilted: the rear pins go ${steps} hole${steps === 1 ? "" : "s"} (${rise}mm) above the front pins, which over ${shelfDepth}mm of shelf gives ${achievedTilt} degrees${Math.abs(achievedTilt - fitting.tilt) > 0.5 ? ` rather than the ${fitting.tilt} asked for — the hole pitch is ${gridPitch}mm, so that is the nearest available angle` : ""}.`,
+            ]
           : [],
     });
     addPart(ctx, shelf);
-    out.push({ partId: shelf.id, bayId: bay.id, y, region: bay.region });
+    out.push({ partId: shelf.id, bayId: bay.id, y, rearRise: rise, region: bay.region });
+    built += 1;
   }
+
+  if (built === 0) return;
 
   const support = getShelfSupport(ctx.spec.joinery.shelfSupportId);
   addHardware(ctx, {
     kind: "shelf-support",
     catalogId: support.id,
     name: support.name,
-    quantity: fitting.tiers * 4,
+    // Four per shelf that was actually built, not per shelf that was asked for.
+    quantity: built * 4,
     unit: "each",
     unitPrice: support.pricePerUnit,
     note: `${bay.label}: shoe rack.`,
@@ -677,14 +702,14 @@ function buildPullouts(
   fitting: PulloutFitting,
   out: ResolvedDrawer[],
 ): void {
-  // A pull-out tray is a drawer without a front, so it reuses the drawer builder
-  // rather than duplicating the runner arithmetic.
+  /* A pull-out tray is a drawer without a front, so it reuses the drawer builder
+     rather than duplicating the runner arithmetic — including its height stacking,
+     which snaps each pitch *down* to the 32mm grid and gives the remainder to the
+     bottom tray. Rounding each tray up independently overran the top of the bay. */
   const asDrawers: DrawersFitting = {
     kind: "drawers",
     count: fitting.count,
-    frontHeights: Array.from({ length: fitting.count }, () =>
-      mm2(snap(bay.clearHeight / fitting.count, 32)),
-    ),
+    frontHeights: null,
     dividers: 0,
     hasFronts: false,
   };

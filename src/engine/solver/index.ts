@@ -1,7 +1,12 @@
 import { applyDrawerHardware } from "../rules/drawers";
 import { applyHandles } from "../rules/handles";
 import { applyHinges } from "../rules/hinges";
-import { applyBackHousing, applyJoinery, applyPlinthNotches } from "../rules/joinery";
+import {
+  applyBackHousing,
+  applyJoinery,
+  applyLevellingLegs,
+  applyPlinthNotches,
+} from "../rules/joinery";
 import {
   applyRailSupports,
   applySystemHoles,
@@ -13,7 +18,7 @@ import { partBounds, type Part } from "../core/part";
 import type { WardrobeSpec } from "../spec/types";
 import { buildCarcase, type RegionBounds } from "./carcase";
 import { addParts, createContext, type SolverContext } from "./context";
-import { buildDoors, type ResolvedLeaf } from "./doors";
+import { buildDoors, type ImpossibleLeaf, type ResolvedLeaf } from "./doors";
 import { freezeDraft, type HardwareUse, type Joint, type PartDraft } from "./draft";
 import { buildFittings, type ResolvedAdjustableShelf, type ResolvedDrawer, type ResolvedRail } from "./fittings";
 import { resolveFrame, type Frame } from "./frame";
@@ -34,6 +39,8 @@ export type WardrobeModel = {
   readonly bays: readonly ResolvedBay[];
   readonly dividers: readonly ResolvedDivider[];
   readonly leaves: readonly ResolvedLeaf[];
+  /** Door leaves the reveals and gaps left no room for. */
+  readonly impossibleLeaves: readonly ImpossibleLeaf[];
   readonly drawers: readonly ResolvedDrawer[];
   readonly adjustableShelves: readonly ResolvedAdjustableShelf[];
   readonly rails: readonly ResolvedRail[];
@@ -78,7 +85,7 @@ export function solve(spec: WardrobeSpec): WardrobeModel {
     (part) => part.role === "side" || part.role === "divider",
   );
   applySystemHoles(ctx, verticalPanels, layout.bays, fittings.adjustableShelves);
-  markShelfPins(ctx, fittings.adjustableShelves);
+  markShelfPins(ctx, fittings.adjustableShelves, layout.bays);
   applyJoinery(ctx);
   applyBackHousing(ctx, {
     leftSideId: carcase.leftSideId,
@@ -90,6 +97,7 @@ export function solve(spec: WardrobeSpec): WardrobeModel {
     leftSideId: carcase.leftSideId,
     rightSideId: carcase.rightSideId,
   });
+  applyLevellingLegs(ctx, { bottomId: carcase.bottomId });
   applyRailSupports(ctx, fittings.rails, layout.bays);
   applyWallAnchors(ctx, {
     leftSideId: carcase.leftSideId,
@@ -118,6 +126,7 @@ export function solve(spec: WardrobeSpec): WardrobeModel {
     bays: layout.bays,
     dividers: layout.dividers,
     leaves: doors.leaves,
+    impossibleLeaves: doors.impossible,
     drawers: fittings.drawers,
     adjustableShelves: fittings.adjustableShelves,
     rails: fittings.rails,
@@ -162,7 +171,7 @@ export type { SolverContext };
 export { resolveFrame } from "./frame";
 export type { Frame, Region } from "./frame";
 export type { ResolvedBay, ResolvedDivider } from "./layout";
-export type { ResolvedLeaf } from "./doors";
+export type { ImpossibleLeaf, ResolvedLeaf } from "./doors";
 export type { ResolvedDrawer, ResolvedRail, ResolvedAdjustableShelf } from "./fittings";
 export type { HardwareUse, Joint } from "./draft";
 export { hingeOverlay, hingePositions } from "./doors";

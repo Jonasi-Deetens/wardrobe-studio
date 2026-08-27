@@ -398,19 +398,8 @@ export function buildCarcase(frame: Frame): CarcaseResult {
     }
   }
 
-  if (plinth.type === "legs") {
-    const leg = getLevellingLeg(plinth.legId);
-    const legsAcross = Math.max(2, Math.ceil(frame.built.width / 800) + 1);
-    hardware.push({
-      kind: "levelling-leg",
-      catalogId: leg.id,
-      name: leg.name,
-      quantity: legsAcross * 2,
-      unit: "each",
-      unitPrice: leg.pricePerUnit,
-      note: `Set to ${plinth.height}mm. Range ${leg.range[0]}-${leg.range[1]}mm.`,
-    });
-  }
+  /* Levelling legs are billed by applyLevellingLegs, from the plates it actually
+     drills into the underside of the bottom panel. */
 
   /* ------------------------------------------------------- top stretcher --- */
 

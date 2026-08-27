@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getMaterial } from "../catalog/materials";
+import { getBanding, getMaterial } from "../catalog/materials";
 import { partBounds, type Part } from "../core/part";
 import { isMultipleOf } from "../core/units";
 import { createDefaultSpec } from "../spec/defaults";
@@ -157,7 +157,7 @@ describe("system holes", () => {
     }
   });
 
-  it("makes both hole rows symmetrical about the panel", () => {
+  it("makes both hole rows symmetrical about the finished panel", () => {
     const side = model.parts.find((p) => p.id === "side-left");
     expect(side).toBeDefined();
     const ls = (side?.ops ?? [])
@@ -165,7 +165,15 @@ describe("system holes", () => {
       .map((op) => (op.kind === "hole" ? op.l : 0));
     const first = Math.min(...ls);
     const last = Math.max(...ls);
-    expect(first).toBeCloseTo((side?.length ?? 0) - last, 1);
+
+    // Symmetry is about the panel as it ends up on the wall, banding included, so
+    // the as-cut coordinates are offset by the banding on the bottom edge.
+    const band = (id: string | null | undefined): number =>
+      id ? getBanding(id).thickness : 0;
+    const bottomBand = band(side?.banding.l0);
+    const topBand = band(side?.banding.l1);
+    const finished = (side?.length ?? 0) + bottomBand + topBand;
+    expect(first + bottomBand).toBeCloseTo(finished - (last + bottomBand), 1);
   });
 });
 

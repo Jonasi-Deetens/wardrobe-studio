@@ -1,4 +1,4 @@
-import { getConnector, type ConnectorSpec } from "../catalog/hardware";
+import { getConnector, getLevellingLeg, type ConnectorSpec } from "../catalog/hardware";
 import { mm2 } from "../core/units";
 import type { SolverContext } from "../solver/context";
 import {
@@ -44,11 +44,26 @@ export function applyJoinery(ctx: SolverContext): void {
   const connector = getConnector(ctx.spec.joinery.connectorId);
   const spacing = ctx.spec.joinery.connectorSpacing;
 
+  let total = 0;
   for (const joint of ctx.joints) {
     const through = ctx.partsById.get(joint.throughPartId);
     const abutting = ctx.partsById.get(joint.abuttingPartId);
     if (!through || !abutting) continue;
-    applyJoint(joint, through, abutting, connector, spacing);
+    total += applyJoint(joint, through, abutting, connector, spacing);
+  }
+
+  if (total > 0) {
+    // Counted from the holes actually drilled, so the bill of materials cannot
+    // drift from the drawings.
+    ctx.hardware.push({
+      kind: "connector",
+      catalogId: connector.id,
+      name: connector.name,
+      quantity: total,
+      unit: "each",
+      unitPrice: connector.pricePerUnit,
+      note: `${ctx.joints.length} carcase joints at ${spacing}mm nominal centres.`,
+    });
   }
 }
 
@@ -58,9 +73,9 @@ function applyJoint(
   abutting: PartDraft,
   connector: ConnectorSpec,
   nominalSpacing: number,
-): void {
+): number {
   const length = jointLength(joint);
-  if (length <= 0) return;
+  if (length <= 0) return 0;
 
   const positions = connectorPositions(length, connector, nominalSpacing);
 
@@ -128,6 +143,8 @@ function applyJoint(
   through.notes.push(
     `${joint.label}: ${positions.length} x ${connector.name} at ${mm2(length / Math.max(1, positions.length - 1))}mm centres.`,
   );
+
+  return positions.length;
 }
 
 function facePurpose(connector: ConnectorSpec) {
@@ -271,4 +288,95 @@ export function applyPlinthNotches(
       `Notched at the bottom front corner ${plinth.height} x ${plinth.setback}mm to form the recessed plinth.`,
     );
   }
+}
+
+/**
+ * Screw holes for levelling leg plates, in the underside of the bottom panel.
+ *
+ * Each plate is fixed with four screws in a square, which is what stops the leg
+ * twisting when it is wound up and down. Legs sit `inset` from the panel edges and
+ * are spread along the width at no more than 800mm apart, because a bottom panel
+ * carrying a full wardrobe sags between widely spaced feet.
+ */
+const LEG_PLATE_SCREW_SPACING = 40;
+
+export function applyLevellingLegs(
+  ctx: SolverContext,
+  panels: { readonly bottomId: string },
+): void {
+  const plinth = ctx.spec.carcase.plinth;
+  if (plinth.type !== "legs") return;
+
+  const bottom = ctx.partsById.get(panels.bottomId);
+  if (!bottom) return;
+
+  const leg = getLevellingLeg(plinth.legId);
+  const half = LEG_PLATE_SCREW_SPACING / 2;
+  /* The bottom panel's length runs across the wardrobe and its width front to back,
+     so the legs march along the length and sit in from both edges of the width. */
+  const along = Math.max(2, Math.ceil(bottom.length / 800) + 1);
+  const first = mm2(leg.inset);
+  const last = mm2(bottom.length - leg.inset);
+  const step = along > 1 ? (last - first) / (along - 1) : 0;
+
+  let legCount = 0;
+  for (let i = 0; i < along; i += 1) {
+    const centreL = mm2(first + step * i);
+    for (const [rowIndex, centreW] of [
+      mm2(leg.inset),
+      mm2(bottom.width - leg.inset),
+    ].entries()) {
+      const holes = legPlateHoles(bottom, centreL, centreW, half);
+      if (holes.length < 4) continue;
+      holes.forEach((hole, index) => {
+        bottom.ops.push({
+          kind: "hole",
+          id: `leg-${i + 1}-${rowIndex === 0 ? "front" : "rear"}-${index + 1}`,
+          face: "B",
+          l: hole.l,
+          w: hole.w,
+          diameter: leg.plateHoleDiameter,
+          depth: leg.plateHoleDepth,
+          through: false,
+          purpose: "leg-plate",
+          note: `Levelling leg plate, ${rowIndex === 0 ? "front" : "rear"} row`,
+        });
+      });
+      legCount += 1;
+    }
+  }
+
+  if (legCount === 0) return;
+
+  bottom.notes.push(
+    `${legCount} levelling leg plates on the underside, ${LEG_PLATE_SCREW_SPACING}mm square hole patterns, leg centres ${leg.inset}mm in from the edges.`,
+  );
+  ctx.hardware.push({
+    kind: "levelling-leg",
+    catalogId: leg.id,
+    name: leg.name,
+    quantity: legCount,
+    unit: "each",
+    unitPrice: leg.pricePerUnit,
+    note: `Set to ${plinth.height}mm. Range ${leg.range[0]}-${leg.range[1]}mm.`,
+  });
+}
+
+/** The four screw positions of one plate, dropped entirely if any falls off the panel. */
+function legPlateHoles(
+  panel: PartDraft,
+  centreL: number,
+  centreW: number,
+  half: number,
+): { l: number; w: number }[] {
+  const holes: { l: number; w: number }[] = [];
+  for (const dl of [-half, half]) {
+    for (const dw of [-half, half]) {
+      const l = mm2(centreL + dl);
+      const w = mm2(centreW + dw);
+      if (l < 0 || l > panel.length || w < 0 || w > panel.width) return [];
+      holes.push({ l, w });
+    }
+  }
+  return holes;
 }
