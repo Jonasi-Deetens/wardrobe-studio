@@ -1,8 +1,12 @@
 import { getConnector, getHinge, getRail, getSlide } from "../catalog/hardware";
 import { getMaterial, getSheetSize, MATERIALS } from "../catalog/materials";
 import { mm2 } from "../core/units";
+import type { UnitModel } from "../project";
 import type { WardrobeModel } from "../solver";
 import type { ResolvedBay } from "../solver/layout";
+import { adviseCladding } from "./cladding";
+import { adviseCounter } from "./counter";
+import { adviseWorkTable } from "./table";
 
 /**
  * Construction advice.
@@ -30,9 +34,36 @@ export type Finding = {
   readonly bayId?: string;
   /** Part id when the finding is about one panel. */
   readonly partId?: string;
+  /** Which unit the finding is about, or absent when it is about the room as a whole. */
+  readonly unitId?: string;
 };
 
 const SEVERITY_RANK: Record<Severity, number> = { error: 0, warning: 1, advice: 2 };
+
+export { adviseCladding } from "./cladding";
+export { adviseCounter } from "./counter";
+export { adviseProject } from "./room";
+export { adviseWorkTable } from "./table";
+
+/**
+ * Whatever advice applies to this unit, whatever kind it is.
+ *
+ * Callers should not have to know which kinds exist: adding a unit kind should light up its
+ * advice everywhere findings are shown, which is the panel, the summary and the booklet.
+ */
+export function adviseUnit(unit: UnitModel): Finding[] {
+  /* Cladding hangs off any kind of unit, so its advice is added here rather than repeated in
+     each kind's advisor. */
+  const skin = adviseCladding(unit.spec.cladding, unit.parts);
+  switch (unit.detail.kind) {
+    case "wardrobe":
+      return sortFindings([...advise(unit.detail.model), ...skin]);
+    case "work-table":
+      return sortFindings([...adviseWorkTable(unit.detail.model), ...skin]);
+    case "counter":
+      return sortFindings([...adviseCounter(unit.detail.model), ...skin]);
+  }
+}
 
 export function advise(model: WardrobeModel): Finding[] {
   const findings: Finding[] = [
@@ -44,7 +75,12 @@ export function advise(model: WardrobeModel): Finding[] {
     ...productionFindings(model),
   ];
 
-  return findings.sort(
+  return sortFindings(findings);
+}
+
+/** Worst first, then stable by id so the list does not jump about while a slider moves. */
+export function sortFindings(findings: readonly Finding[]): Finding[] {
+  return [...findings].sort(
     (a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity] || a.id.localeCompare(b.id),
   );
 }

@@ -9,13 +9,20 @@ import {
   Ruler,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import { buildAssemblySequence } from "@/engine/assembly";
-import { bomToCsv, cutListToCsv, drillingToCsv, nestingToCsv } from "@/engine/export/csv";
+import {
+  bomToCsv,
+  cutListToCsv,
+  drillingToCsv,
+  nestingToCsv,
+  tubeScheduleToCsv,
+  weldScheduleToCsv,
+} from "@/engine/export/csv";
 import { serialiseSpec } from "@/engine/spec/migrate";
 import { cn } from "@/lib/cn";
 import { canReveal, isDesktop, revealFile, saveFile, type SaveOutcome } from "../lib/platform";
 import { useNesting } from "../nesting/useNesting";
-import { useDerived } from "../store/derived";
+import { UnitFilter } from "../shell/UnitFilter";
+import { useAssembly, useUnitScope } from "../store/derived";
 import { useStudio } from "../store/useStudio";
 import { captureViews } from "../viewport/capture";
 import { Button, Switch } from "../ui";
@@ -37,9 +44,11 @@ type Outcome = {
 };
 
 export function ExportView() {
-  const { model, cutList, assembly } = useDerived();
+  const scope = useUnitScope();
+  const cutList = scope.cutList;
+  const assembly = useAssembly();
   const nesting = useNesting();
-  const spec = useStudio((state) => state.spec);
+  const spec = useStudio((state) => state.project);
   const runExport = useExportWorker();
 
   const [busy, setBusy] = useState<string | null>(null);
@@ -113,6 +122,7 @@ export function ExportView() {
         const result = await runExport({
           kind: "pdf",
           spec,
+          unitId: scope.unitId,
           nest: nesting.result,
           views: capture.views,
           sections: {
@@ -138,7 +148,7 @@ export function ExportView() {
     run(
       "dxf",
       async () => {
-        const result = await runExport({ kind: "dxf", spec });
+        const result = await runExport({ kind: "dxf", spec, unitId: scope.unitId });
         const saved = report(
           await saveFile({
             suggestedName: `${name}-dxf.zip`,
@@ -164,13 +174,18 @@ export function ExportView() {
   return (
     <div className="ws-scroll h-full overflow-y-auto bg-bg">
       <div className="mx-auto max-w-4xl px-6 py-8">
-        <header className="mb-8">
-          <h1 className="text-[19px] font-semibold tracking-tight text-ink">Export</h1>
-          <p className="mt-1 text-[12.5px] leading-relaxed text-muted">
-            Everything here is generated from the same model you see in the viewport. The drawings in
-            the PDF and the DXF come from one renderer, so a hole cannot appear on paper and be
-            missing from the machine file.
-          </p>
+        <header className="mb-8 flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h1 className="text-[19px] font-semibold tracking-tight text-ink">Export</h1>
+            <p className="mt-1 text-[12.5px] leading-relaxed text-muted">
+              Everything here is generated from the same model you see in the viewport. The drawings
+              in the PDF and the DXF come from one renderer, so a hole cannot appear on paper and be
+              missing from the machine file.
+            </p>
+          </div>
+          <div className="shrink-0">
+            <UnitFilter className="h-9" />
+          </div>
         </header>
 
         {/* The booklet */}
@@ -204,7 +219,7 @@ export function ExportView() {
             />
             <Toggle
               label="One page per panel"
-              hint={`${new Set(model.parts.map((p) => p.label)).size} drawings`}
+              hint={`${new Set(scope.parts.map((part) => part.label)).size} drawings`}
               checked={options.panelPages}
               onChange={(panelPages) => setOptions((o) => ({ ...o, panelPages }))}
             />
@@ -298,7 +313,7 @@ export function ExportView() {
                   saveCsv(
                     "drilling",
                     `${name}-drilling.csv`,
-                    drillingToCsv(model.parts),
+                    drillingToCsv(scope.parts),
                     "Drilling coordinates saved.",
                   )
                 }
@@ -333,6 +348,58 @@ export function ExportView() {
               </Button>
             }
           />
+
+          {cutList.metal.memberCount > 0 ? (
+            <Card
+              icon={<FileSpreadsheet className="size-4 text-warn" />}
+              title="Tube schedule CSV"
+              body={`${cutList.metal.memberCount} pieces of section with both end cuts, weight and cost, plus the cutting list for each ${cutList.metal.nest.stockLength}mm bar.`}
+              action={
+                <Button
+                  variant="default"
+                  size="sm"
+                  disabled={busy !== null}
+                  onClick={() =>
+                    saveCsv(
+                      "tube",
+                      `${name}-tube-schedule.csv`,
+                      tubeScheduleToCsv(cutList),
+                      "Tube schedule saved.",
+                    )
+                  }
+                >
+                  <FileSpreadsheet className="size-3.5" />
+                  {verb}
+                </Button>
+              }
+            />
+          ) : null}
+
+          {cutList.metal.weldCount > 0 ? (
+            <Card
+              icon={<FileSpreadsheet className="size-4 text-accent" />}
+              title="Weld schedule CSV"
+              body={`${cutList.metal.weldCount} joints and ${cutList.metal.weldMetres.toFixed(1)} m of weld, grouped by size and finish, with which are ground flush.`}
+              action={
+                <Button
+                  variant="default"
+                  size="sm"
+                  disabled={busy !== null}
+                  onClick={() =>
+                    saveCsv(
+                      "welds",
+                      `${name}-weld-schedule.csv`,
+                      weldScheduleToCsv(cutList),
+                      "Weld schedule saved.",
+                    )
+                  }
+                >
+                  <FileSpreadsheet className="size-3.5" />
+                  {verb}
+                </Button>
+              }
+            />
+          ) : null}
 
           <Card
             icon={<FileCode2 className="size-4 text-muted" />}
@@ -399,7 +466,7 @@ export function ExportView() {
             panels in this project.
           </p>
           <ol className="mt-4 space-y-3">
-            {buildAssemblySequence(model).steps.map((step) => (
+            {assembly.steps.map((step) => (
               <li key={step.index} className="flex gap-3">
                 <span className="grid size-6 shrink-0 place-items-center rounded-full bg-raised text-[11px] font-semibold text-muted">
                   {step.index}

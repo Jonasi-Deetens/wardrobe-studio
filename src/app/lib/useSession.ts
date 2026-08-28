@@ -21,7 +21,7 @@ import {
  * abandoned and says so instead.
  */
 export function useSession(): { readonly restored: boolean } {
-  const setSpec = useStudio((state) => state.setSpec);
+  const setProject = useStudio((state) => state.setProject);
   const setOpenGroups = useStudio((state) => state.setOpenGroups);
   const loadJson = useStudio((state) => state.loadJson);
   const addNotices = useStudio((state) => state.addNotices);
@@ -29,8 +29,8 @@ export function useSession(): { readonly restored: boolean } {
 
   useEffect(() => {
     let cancelled = false;
-    const specAtStart = useStudio.getState().spec;
-    const edited = (): boolean => useStudio.getState().spec !== specAtStart;
+    const projectAtStart = useStudio.getState().project;
+    const edited = (): boolean => useStudio.getState().project !== projectAtStart;
 
     void (async () => {
       const fromHash = await decodeSpecFromHash(window.location.hash);
@@ -49,7 +49,7 @@ export function useSession(): { readonly restored: boolean } {
           setRestored(true);
           return;
         }
-        setSpec(fromHash.load.spec, [
+        setProject(fromHash.load.spec, [
           "Opened from a shared link.",
           ...fromHash.load.repairs,
         ]);
@@ -83,14 +83,14 @@ export function useSession(): { readonly restored: boolean } {
     return () => {
       cancelled = true;
     };
-  }, [setSpec, setOpenGroups, loadJson, addNotices]);
+  }, [setProject, setOpenGroups, loadJson, addNotices]);
 
   return { restored };
 }
 
 /** Debounced autosave. Fast enough to be safe, slow enough not to write on every keypress. */
 export function useAutosave(enabled: boolean): void {
-  const spec = useStudio((state) => state.spec);
+  const project = useStudio((state) => state.project);
   const markSaved = useStudio((state) => state.markSaved);
   const addNotices = useStudio((state) => state.addNotices);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -101,7 +101,7 @@ export function useAutosave(enabled: boolean): void {
     if (!enabled) return;
     clearTimeout(timer.current);
     timer.current = setTimeout(() => {
-      writeAutosave(spec).then(markSaved, () => {
+      writeAutosave(project).then(markSaved, () => {
         if (warned.current) return;
         warned.current = true;
         addNotices([
@@ -110,18 +110,18 @@ export function useAutosave(enabled: boolean): void {
       });
     }, 700);
     return () => clearTimeout(timer.current);
-  }, [spec, enabled, markSaved, addNotices]);
+  }, [project, enabled, markSaved, addNotices]);
 
   /* A closing tab does not wait for a debounce, so flush on the way out. */
   useEffect(() => {
     if (!enabled) return;
     const flush = (): void => {
       // Nothing can be reported at this point; the page is going away.
-      void writeAutosave(spec).catch(() => {});
+      void writeAutosave(project).catch(() => {});
     };
     window.addEventListener("pagehide", flush);
     return () => window.removeEventListener("pagehide", flush);
-  }, [spec, enabled]);
+  }, [project, enabled]);
 }
 
 export function usePersistedGroups(enabled: boolean): void {

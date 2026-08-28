@@ -4,7 +4,8 @@ import type { CutListRow } from "@/engine/cutlist";
 import { PANEL_EDGES, type PanelEdge } from "@/engine/core/part";
 import { cn } from "@/lib/cn";
 import { useBelow } from "../lib/useMediaQuery";
-import { useDerived } from "../store/derived";
+import { UnitFilter } from "../shell/UnitFilter";
+import { useProjectModel, useUnitScope } from "../store/derived";
 import { useStudio } from "../store/useStudio";
 import { Button, SegmentedControl, Select, Tooltip } from "../ui";
 
@@ -15,13 +16,19 @@ import { Button, SegmentedControl, Select, Tooltip } from "../ui";
  * saw operator works: everything in 18mm white first, then the 8mm backs. Hovering a row
  * highlights the panels in 3D, which is what makes the list and the model feel like one
  * object rather than two views that happen to agree.
+ *
+ * It covers the whole room, which is the point of ordering material for a room rather than
+ * for a cupboard: two identical panels in two units collapse into one row of quantity 2 and
+ * come off one board. The unit each row is used in is named on the row, and the filter
+ * narrows the whole list to a single unit when one unit is being built.
  */
 
 type SortKey = "label" | "quantity" | "length" | "width" | "thickness" | "holes";
 type SortDirection = "asc" | "desc";
 
 export function CutListView() {
-  const { cutList } = useDerived();
+  const { cutList } = useUnitScope();
+  const project = useProjectModel();
   const hoverParts = useStudio((state) => state.hoverParts);
   const openPanelFor = useStudio((state) => state.openPanelFor);
   const selectPart = useStudio((state) => state.selectPart);
@@ -77,6 +84,16 @@ export function CutListView() {
     return [...map.values()];
   }, [sorted, grouped]);
 
+  /* Which units a row is used in, spelled out rather than as ids — but only when there is
+     more than one unit, because "Wardrobe" on every row of a one-unit project is noise. */
+  const unitsOf = useMemo(() => {
+    if (project.units.length < 2) return () => null;
+    return (row: CutListRow): string | null =>
+      row.unitIds.length === 0
+        ? null
+        : row.unitIds.map((id) => project.unitsById.get(id)?.name ?? id).join(" · ");
+  }, [project]);
+
   const toggleSort = (key: SortKey) =>
     setSort((previous) =>
       previous.key === key
@@ -92,6 +109,7 @@ export function CutListView() {
           <span className="tabular text-[11.5px] text-faint">
             {cutList.partCount} panels · {cutList.rows.length} unique · {cutList.holeCount} holes
           </span>
+          <UnitFilter className="h-9 sm:h-7" />
           <div className="relative ml-auto min-w-0 flex-1 sm:flex-none">
             <Search className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-faint" />
             <input
@@ -169,6 +187,7 @@ export function CutListView() {
                     <PanelCard
                       key={row.key}
                       row={row}
+                      units={unitsOf(row)}
                       selected={row.partIds.includes(selectedPartId ?? "")}
                       onSelect={() => selectPart(row.partIds[0] as string)}
                       onOpen={() => openPanelFor(row.partIds[0] as string)}
@@ -234,6 +253,7 @@ export function CutListView() {
                 <Row
                   key={row.key}
                   row={row}
+                  units={unitsOf(row)}
                   selected={row.partIds.includes(selectedPartId ?? "")}
                   onEnter={() => hoverParts(row.partIds)}
                   onLeave={() => hoverParts([])}
@@ -279,11 +299,13 @@ const GRAIN_LABEL: Record<CutListRow["grain"], string> = {
  */
 function PanelCard({
   row,
+  units,
   selected,
   onSelect,
   onOpen,
 }: {
   readonly row: CutListRow;
+  readonly units: string | null;
   readonly selected: boolean;
   readonly onSelect: () => void;
   readonly onOpen: () => void;
@@ -309,6 +331,9 @@ function PanelCard({
           ) : null}
           <span className="min-w-0 flex-1">
             <span className="block truncate text-[13px] font-medium text-ink">{row.label}</span>
+            {units ? (
+              <span className="block truncate text-[11px] text-faint">{units}</span>
+            ) : null}
             <span className="tabular mt-0.5 block text-[15px] text-ink">
               {row.length} <span className="text-faint">×</span> {row.width}
               <span className="ml-1.5 text-[12px] text-faint">{row.thickness} thk</span>
@@ -391,12 +416,14 @@ const EDGE_ORDER: readonly PanelEdge[] = PANEL_EDGES;
 
 function Row({
   row,
+  units,
   selected,
   onEnter,
   onLeave,
   onOpen,
 }: {
   readonly row: CutListRow;
+  readonly units: string | null;
   readonly selected: boolean;
   readonly onEnter: () => void;
   readonly onLeave: () => void;
@@ -415,6 +442,7 @@ function Row({
       <td className="tabular px-2 py-1 text-right text-muted">{row.quantity}</td>
       <td className="max-w-[280px] px-2 py-1">
         <span className="block truncate text-ink">{row.label}</span>
+        {units ? <span className="block truncate text-[10.5px] text-faint">{units}</span> : null}
       </td>
       <td className="tabular px-2 py-1 text-right text-ink">{row.length}</td>
       <td className="tabular px-2 py-1 text-right text-ink">{row.width}</td>
@@ -467,7 +495,7 @@ function Row({
 }
 
 function BandingTotals() {
-  const { cutList } = useDerived();
+  const { cutList } = useUnitScope();
   if (cutList.bandingTotals.length === 0) return null;
 
   return (

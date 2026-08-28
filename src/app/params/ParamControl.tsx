@@ -1,4 +1,4 @@
-import { useStudio } from "../store/useStudio";
+import { useEditingSpec, useStudio } from "../store/useStudio";
 import { getAtPath, pathKey } from "../store/paths";
 import { Field, NumberInput, Select, Switch } from "../ui";
 import type { Param } from "./descriptors";
@@ -8,7 +8,7 @@ import type { Param } from "./descriptors";
  * component to keep in sync with the schema.
  */
 export function ParamControl({ param }: { readonly param: Param }) {
-  const spec = useStudio((state) => state.spec);
+  const spec = useEditingSpec();
   const setValue = useStudio((state) => state.setValue);
   const id = `param-${pathKey(param.path)}`;
   const raw = getAtPath(spec, param.path);
@@ -98,6 +98,46 @@ export function ParamControl({ param }: { readonly param: Param }) {
             onChange={(next) => setValue(param.path, next)}
             className={param.options.some((option) => option.label.length > 22) ? "max-w-none w-full" : undefined}
           />
+        </Field>
+      );
+    }
+
+    case "multi-enum": {
+      const selected = Array.isArray(raw) ? raw.filter((v): v is string => typeof v === "string") : [];
+      return (
+        <Field label={param.label} why={param.why} hint={param.hint} htmlFor={id} stacked>
+          <div className="flex flex-wrap gap-1" id={id}>
+            {param.options.map((option) => {
+              const on = selected.includes(option.value);
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  aria-pressed={on}
+                  title={option.hint}
+                  onClick={() =>
+                    setValue(
+                      param.path,
+                      on
+                        ? selected.filter((value) => value !== option.value)
+                        : /* Keep the descriptor's order, so the set reads the same however it
+                             was clicked and the cut list does not reshuffle. */
+                          param.options
+                            .map((choice) => choice.value)
+                            .filter((value) => value === option.value || selected.includes(value)),
+                    )
+                  }
+                  className={`h-7 rounded-md border px-2.5 text-[12px] transition-colors pointer-coarse:h-11 pointer-coarse:text-[13px] ${
+                    on
+                      ? "border-accent/60 bg-accent/15 text-ink"
+                      : "border-line bg-bg/60 text-muted hover:border-line-strong hover:text-ink"
+                  }`}
+                >
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
         </Field>
       );
     }

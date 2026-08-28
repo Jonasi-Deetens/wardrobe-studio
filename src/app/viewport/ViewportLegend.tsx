@@ -1,7 +1,7 @@
 import { MousePointerClick } from "lucide-react";
 import { PART_ROLE_LABELS } from "@/engine/core/part";
 import { getMaterial } from "@/engine/catalog/materials";
-import { useDerived, useSelectedPart } from "../store/derived";
+import { useProjectModel, useSelectedPart } from "../store/derived";
 import { useStudio } from "../store/useStudio";
 import { Button } from "../ui";
 
@@ -11,11 +11,11 @@ import { Button } from "../ui";
  * and how big is it.
  */
 export function ViewportLegend() {
-  const { model } = useDerived();
+  const project = useProjectModel();
   const selected = useSelectedPart();
   const hoveredId = useStudio((state) => state.hoveredPartId);
   const openPanelFor = useStudio((state) => state.openPanelFor);
-  const hovered = hoveredId ? model.partsById.get(hoveredId) : undefined;
+  const hovered = hoveredId ? project.partsById.get(hoveredId) : undefined;
   const part = hovered ?? selected;
 
   if (!part) {

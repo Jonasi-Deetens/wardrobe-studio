@@ -10,9 +10,9 @@ import { projectFileName } from "./project";
  * glance in a taskbar or a window list, where a word would be truncated away.
  */
 export function useWindowTitle(): void {
-  const name = useStudio((state) => state.spec.meta.name);
+  const name = useStudio((state) => state.project.meta.name);
   const filePath = useStudio((state) => state.filePath);
-  const dirty = useStudio((state) => state.spec !== state.cleanSpec);
+  const dirty = useStudio((state) => state.project !== state.cleanProject);
 
   useEffect(() => {
     const label = filePath ? projectFileName() : name.trim() || "Untitled";

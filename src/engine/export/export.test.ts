@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { buildAssemblySequence } from "../assembly";
-import { advise } from "../advisor";
-import { buildCutList } from "../cutlist";
+import { advise, adviseUnit } from "../advisor";
+import { buildCutList, cutListOfModel } from "../cutlist";
 import { nest, nestablePartsOf } from "../cutlist/nesting";
 import { holeLayerName } from "../drawing/types";
-import { createDefaultSpec } from "../spec/defaults";
-import { PRESETS } from "../spec/presets";
+import { clearProjectCache, cutListInputOf, solveProject } from "../project";
+import { createDefaultProject, createDefaultSpec } from "../spec/defaults";
+import { PRESETS, PROJECT_PRESETS } from "../spec/presets";
 import { solve } from "../solver";
 import { bomToCsv, cutListToCsv, drillingToCsv, nestingToCsv } from "./csv";
 import { modelToDxfFiles, partToDxf } from "./dxf";
@@ -13,7 +14,7 @@ import { buildBooklet } from "./pdf";
 import { createZip } from "./zip";
 
 const model = solve(createDefaultSpec());
-const cutList = buildCutList(model);
+const cutList = cutListOfModel(model);
 const nestResult = nest(nestablePartsOf(model.parts), {
   sheetSizeId: "2800x2070",
   kerf: 3.2,
@@ -21,6 +22,7 @@ const nestResult = nest(nestablePartsOf(model.parts), {
   respectGrain: true,
 });
 const findings = advise(model);
+const project = solveProject(createDefaultProject());
 
 describe("DXF export", () => {
   const side = model.parts.find((part) => part.role === "side");
@@ -190,7 +192,7 @@ describe("zip", () => {
 describe("PDF booklet", () => {
   it("builds a valid PDF covering every section", async () => {
     const bytes = await buildBooklet({
-      model,
+      project,
       cutList,
       nest: nestResult,
       findings,
@@ -205,7 +207,7 @@ describe("PDF booklet", () => {
 
   it("builds without nesting or optional sections", async () => {
     const bytes = await buildBooklet({
-      model,
+      project,
       cutList,
       nest: null,
       findings: [],
@@ -213,4 +215,54 @@ describe("PDF booklet", () => {
     });
     expect(new TextDecoder().decode(bytes.slice(0, 5))).toBe("%PDF-");
   }, 60_000);
+
+  /**
+   * Every shipped room, all the way to a printable booklet.
+   *
+   * This is the one test that runs the whole pipeline over every unit kind at once: a folded
+   * stainless top, a welded frame with its tube and weld schedules, a drawer bank inside a
+   * counter, cladding boards with their fixing holes, and a room plan on the cover. A booklet
+   * that throws is the most expensive kind of bug, because it happens at the end of the job.
+   */
+  for (const preset of PROJECT_PRESETS) {
+    it(`builds a booklet for the ${preset.name} preset`, async () => {
+      clearProjectCache();
+      const solved = solveProject(preset.build());
+      const list = buildCutList(cutListInputOf(solved));
+      const bytes = await buildBooklet({
+        project: solved,
+        cutList: list,
+        nest: nest(nestablePartsOf(solved.parts), {
+          sheetSizeId: solved.spec.production.sheetSizeId,
+          kerf: solved.spec.production.kerf,
+          trim: solved.spec.production.sheetTrim,
+          respectGrain: solved.spec.production.grainPolicy === "respect",
+        }),
+        findings: solved.units.flatMap((unit) => adviseUnit(unit)),
+        sections: { cuttingDiagrams: true, panelPages: true, drillingTable: true, assembly: true },
+        date: new Date("2026-01-15T09:00:00Z"),
+      });
+      expect(new TextDecoder().decode(bytes.slice(0, 5))).toBe("%PDF-");
+      expect(bytes.length).toBeGreaterThan(40_000);
+    }, 180_000);
+  }
+});
+
+/**
+ * A preset is an answer, not a question. Anything the advisor calls an error is something
+ * that cannot be built, so shipping one would be telling the user to fix our own work.
+ */
+describe("no shipped preset is broken by its own advice", () => {
+  for (const preset of PROJECT_PRESETS) {
+    it(preset.id, () => {
+      clearProjectCache();
+      const solved = solveProject(preset.build());
+      const errors = solved.units
+        .flatMap((unit) => adviseUnit(unit).map((finding) => ({ unit, finding })))
+        .filter((entry) => entry.finding.severity === "error");
+      expect(
+        errors.map((entry) => `${entry.unit.name}: ${entry.finding.title}`).join("; "),
+      ).toBe("");
+    });
+  }
 });

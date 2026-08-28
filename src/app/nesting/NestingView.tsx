@@ -7,6 +7,7 @@ import { cn } from "@/lib/cn";
 import { DrawingCanvas } from "../drawing/DrawingCanvas";
 import { saveFile } from "../lib/platform";
 import { useBelow } from "../lib/useMediaQuery";
+import { UnitFilter } from "../shell/UnitFilter";
 import { useStudio } from "../store/useStudio";
 import { Button, Tooltip } from "../ui";
 import { useNesting } from "./useNesting";
@@ -139,7 +140,13 @@ export function NestingView() {
             {active.trim}
           </p>
         ) : null}
-        <div className="ml-auto">{csvButton}</div>
+        <div className="ml-auto flex items-center gap-2">
+          {/* The desktop layout carries the filter in the sheet list beside this. */}
+          <span className="lg:hidden">
+            <UnitFilter className="h-8" />
+          </span>
+          {csvButton}
+        </div>
       </div>
 
       {drawing ? (
@@ -246,17 +253,18 @@ export function NestingView() {
     <div className="grid h-full min-h-0 grid-cols-[210px_minmax(0,1fr)] xl:grid-cols-[210px_minmax(0,1fr)_280px]">
       {/* Sheet list */}
       <aside className="ws-scroll min-h-0 overflow-y-auto border-r border-line bg-surface">
-        <div className="sticky top-0 z-10 border-b border-line bg-surface/95 px-3 py-2 backdrop-blur">
+        <div className="sticky top-0 z-10 space-y-1.5 border-b border-line bg-surface/95 px-3 py-2 backdrop-blur">
           <h2 className="text-[11px] font-medium tracking-wide text-muted uppercase">
             Sheets · {sheets.length}
           </h2>
           {nesting.result ? (
-            <p className="tabular mt-0.5 text-[11px] text-faint">
+            <p className="tabular text-[11px] text-faint">
               {nesting.result.totalWastePercent.toFixed(1)}% waste
               {nesting.elapsedMs !== null ? ` · ${nesting.elapsedMs.toFixed(0)}ms` : ""}
               {nesting.stale ? " · updating" : ""}
             </p>
           ) : null}
+          <UnitFilter className="w-full max-w-none" />
         </div>
         <ul>
           {sheets.map((sheet, index) => (

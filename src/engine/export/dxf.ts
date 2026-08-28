@@ -1,5 +1,8 @@
 import { Colors, DxfWriter, LWPolylineFlags, point3d, Units } from "@tarikjabiri/dxf";
+import { getProfile } from "../catalog/profiles";
+import type { Member } from "../core/member";
 import { PANEL_EDGES, type PanelEdge, type Part, type PanelFace } from "../core/part";
+import { endLabel } from "../cutlist/tube";
 import { holeLayerName } from "../drawing/types";
 
 /**
@@ -23,8 +26,14 @@ const LAYER_CUTOUT = "CUTOUT";
 const LAYER_EDGE_HOLE = "HOLES_EDGE";
 const LAYER_NOTES = "NOTES";
 const LAYER_BANDING = "EDGEBAND";
+const LAYER_BEND = "BEND";
 
-export function partToDxf(part: Part, face: PanelFace): string {
+export function partToDxf(input: Part, face: PanelFace): string {
+  /* Same convention as the drawing: the DXF is of the blank, since that is the shape the
+     machine cuts. Bend lines go on their own layer for the press brake. */
+  const part: Part = input.blank
+    ? { ...input, length: input.blank.length, width: input.blank.width }
+    : input;
   const dxf = new DxfWriter();
   dxf.setUnits(Units.Millimeters);
 
@@ -120,6 +129,26 @@ export function partToDxf(part: Part, face: PanelFace): string {
     }
   }
 
+  /* Bend lines, on their own layer. A laser or a plasma table ignores it and cuts the
+     blank; the press brake operator reads it. */
+  if ((part.folds ?? []).length > 0) {
+    dxf.addLayer(LAYER_BEND, Colors.Green);
+    dxf.setCurrentLayerName(LAYER_BEND);
+    for (const fold of part.folds ?? []) {
+      const crossesLength = fold.along === "width";
+      const at = crossesLength && face === "B" ? part.length - fold.at : fold.at;
+      if (crossesLength) dxf.addLine(point3d(at, 0, 0), point3d(at, part.width, 0));
+      else dxf.addLine(point3d(0, at, 0), point3d(part.length, at, 0));
+      dxf.setCurrentLayerName(LAYER_NOTES);
+      dxf.addText(
+        point3d(crossesLength ? at + 3 : 3, crossesLength ? 3 : at + 3, 0),
+        4,
+        `Fold ${fold.direction} ${fold.angle}\u00b0, inside radius ${fold.radius}`,
+      );
+      dxf.setCurrentLayerName(LAYER_BEND);
+    }
+  }
+
   /* Banded edges, marked so the operator knows which edges to run. */
   dxf.setCurrentLayerName(LAYER_BANDING);
   for (const edge of PANEL_EDGES) {
@@ -134,7 +163,9 @@ export function partToDxf(part: Part, face: PanelFace): string {
   dxf.addText(
     point3d(0, -26, 0),
     5,
-    `${part.length} x ${part.width} x ${part.thickness} mm, datum at ${
+    `${part.length} x ${part.width} x ${part.thickness} mm${
+      (part.folds ?? []).length > 0 ? " FLAT BLANK" : ""
+    }, datum at ${
       face === "A" ? part.edgeLabels.l0 : part.edgeLabels.l1
     } / ${part.edgeLabels.w0}${face === "B" ? ", mirrored about the width axis" : ""}`,
   );
@@ -190,13 +221,75 @@ function rabbetLine(
   return [0, part.width - inset, part.length, part.width - inset];
 }
 
+/**
+ * A member as a flat DXF: the outline with its mitres, the holes on a layer per diameter,
+ * and the cut angles as text.
+ *
+ * A tube is cut on a saw rather than on a router, so this is a shop drawing rather than a
+ * machine programme — but the geometry is the same geometry the elevation and the booklet
+ * are drawn from, so a plasma table can cut the profile straight from it if there is one.
+ */
+export function memberToDxf(member: Member): string {
+  const dxf = new DxfWriter();
+  dxf.setUnits(Units.Millimeters);
+  dxf.addLayer(LAYER_OUTLINE, Colors.White);
+  dxf.addLayer(LAYER_NOTES, Colors.Blue);
+
+  const profile = getProfile(member.profileId);
+  const height = profile.height;
+  const cut = (index: 0 | 1): number => {
+    const end = member.ends[index];
+    if (end.kind === "square") return 0;
+    return Math.min(
+      height * Math.tan((Math.min(end.angle, 80) * Math.PI) / 180),
+      member.length / 2,
+    );
+  };
+
+  dxf.setCurrentLayerName(LAYER_OUTLINE);
+  dxf.addLWPolyline(
+    [
+      { point: { x: 0, y: 0 } },
+      { point: { x: member.length - cut(1), y: 0 } },
+      { point: { x: member.length, y: height } },
+      { point: { x: cut(0), y: height } },
+    ],
+    { flags: LWPolylineFlags.Closed },
+  );
+
+  const diameters = new Set(member.ops.map((op) => op.diameter));
+  for (const diameter of [...diameters].sort((a, b) => a - b)) {
+    dxf.addLayer(holeLayerName(diameter), colorForDiameter(diameter));
+  }
+  for (const op of member.ops) {
+    const across = op.face === "t1" ? height - op.across : op.face === "t0" ? op.across : height / 2;
+    dxf.setCurrentLayerName(holeLayerName(op.diameter));
+    dxf.addCircle(point3d(op.along, across, 0), op.diameter / 2);
+  }
+
+  dxf.setCurrentLayerName(LAYER_NOTES);
+  dxf.addText(point3d(0, -14, 0), 8, member.label);
+  dxf.addText(
+    point3d(0, -26, 0),
+    5,
+    `${profile.shortName} · ${member.length}mm long point to long point · ends ${endLabel(
+      member.ends[0],
+    )} / ${endLabel(member.ends[1])}`,
+  );
+
+  return dxf.stringify();
+}
+
 export type DxfFile = { readonly filename: string; readonly content: string };
 
 /**
  * A DXF for every panel. Face B is only exported when there is something on it, so
  * the export is not padded with blank rectangles.
  */
-export function modelToDxfFiles(parts: readonly Part[]): DxfFile[] {
+export function modelToDxfFiles(
+  parts: readonly Part[],
+  members: readonly Member[] = [],
+): DxfFile[] {
   const files: DxfFile[] = [];
   for (const part of parts) {
     const faces: PanelFace[] = ["A"];
@@ -214,6 +307,13 @@ export function modelToDxfFiles(parts: readonly Part[]): DxfFile[] {
         content: partToDxf(part, face),
       });
     }
+  }
+
+  for (const member of members) {
+    files.push({
+      filename: `metal-${safeName(member.label)}-${safeName(member.id)}.dxf`,
+      content: memberToDxf(member),
+    });
   }
   return files;
 }

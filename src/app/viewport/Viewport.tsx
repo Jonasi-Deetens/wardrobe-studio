@@ -2,43 +2,55 @@ import { ContactShadows, Grid, OrbitControls } from "@react-three/drei";
 import { Canvas } from "@react-three/fiber";
 import { Suspense, useMemo } from "react";
 import { Object3D } from "three";
+import { unionBox, type Box3 } from "@/engine/core/geometry";
 import { useCoarsePointer } from "../lib/useMediaQuery";
-import { useDerived, useSelectedPart } from "../store/derived";
+import { useProjectModel, useSelectedPart, useSelectedUnit } from "../store/derived";
 import { useStudio } from "../store/useStudio";
 import { CameraRig } from "./CameraRig";
 import { Dimensions } from "./Dimensions";
-import { Hardware } from "./Hardware";
-import { Parts } from "./Parts";
-import { partTransforms, SCENE_SCALE, sceneBounds } from "./scene";
+import { Room } from "./Room";
+import { SCENE_SCALE, sceneBounds } from "./scene";
+import { Units } from "./Units";
 import { ViewportControls } from "./ViewportControls";
 import { ViewportLegend } from "./ViewportLegend";
 
 /**
  * The 3D view.
  *
- * Every box here is a real panel from the solver, at its real size and position, so what
- * you orbit around is the same thing the cut list describes. Clicking a panel selects it;
- * double-clicking opens its drilling drawing, which is the shortest path from "that one"
- * to "here is where the holes go".
+ * Every box here is a real panel from the solver, at its real size and position, standing
+ * where it stands in the room, so what you orbit around is the same thing the cut list
+ * describes. Clicking a panel selects it; double-clicking opens its drilling drawing, which
+ * is the shortest path from "that one" to "here is where the holes go". Dragging the plate
+ * under a unit moves the unit across the floor.
  */
 export function Viewport() {
-  const { model } = useDerived();
+  const project = useProjectModel();
+  const unit = useSelectedUnit();
   const selected = useSelectedPart();
   const grid = useStudio((state) => state.view.grid);
   const dimensions = useStudio((state) => state.view.dimensions);
-  const explode = useStudio((state) => state.view.explode);
-  const doorsOpen = useStudio((state) => state.view.doorsOpen);
+  const showRoom = useStudio((state) => state.view.showRoom);
+  const isolate = useStudio((state) => state.view.isolateUnit);
   const selectPart = useStudio((state) => state.selectPart);
   const hoverPart = useStudio((state) => state.hoverPart);
 
-  const bounds = useMemo(() => sceneBounds(model), [model]);
+  /* What the camera frames, in room space. Isolating a unit frames that unit; hiding the
+     room frames the units alone, so a single wardrobe in a big room still fills the view
+     rather than sitting as a speck in the corner of an empty floor. */
+  const bounds = useMemo(() => {
+    if (isolate) return sceneBounds(unit.bounds);
+    if (showRoom) return sceneBounds(project.bounds);
+    const units = project.units.reduce<Box3 | null>(
+      (acc, other) => (acc ? unionBox(acc, other.bounds) : other.bounds),
+      null,
+    );
+    return sceneBounds(units ?? project.bounds);
+  }, [isolate, showRoom, project, unit]);
 
-  /* Panels and the hardware mounted on them are placed from one set of transforms, so
-     they cannot disagree about where a door has swung to. */
-  const transforms = useMemo(
-    () => partTransforms(model, { explode, doorsOpen, bounds }),
-    [model, explode, doorsOpen, bounds],
-  );
+  /* Dimensions are per unit and drawn in the unit's own space, so they follow it. */
+  const wardrobe = unit.detail.kind === "wardrobe" ? unit.detail.model : null;
+  const dimensionedPart = selected?.unitId === unit.id ? selected : null;
+
   const floorSize = Math.max(bounds.size[0], bounds.size[2]) * SCENE_SCALE * 6;
 
   /* The key light and its shadow frustum both follow the size of the wardrobe. */
@@ -127,13 +139,23 @@ export function Viewport() {
           </directionalLight>
           <directionalLight position={[2.8, 1.6, -1.8]} intensity={0.5} color="#a8c4e8" />
 
-          {/* Part transforms come out of the engine in millimetres; one group scale is all
-              it takes to put them in the metres the rest of the scene is built in. */}
+          {/* The engine works in millimetres; one group scale is all it takes to put the
+              room and everything in it into the metres the rest of the scene is built in. */}
           <group scale={SCENE_SCALE}>
-            <Parts model={model} transforms={transforms} />
-            <Hardware model={model} transforms={transforms} />
+            {showRoom && !isolate ? <Room room={project.room} /> : null}
+            <Units project={project} />
           </group>
-          {dimensions ? <Dimensions model={model} selected={selected} /> : null}
+
+          {/* Dimension lines scale themselves, so they hang outside that group — but they
+              still have to travel with the unit they measure. */}
+          {dimensions && wardrobe ? (
+            <group
+              position={[unit.at.x * SCENE_SCALE, 0, unit.at.z * SCENE_SCALE]}
+              rotation-y={(unit.at.yaw * Math.PI) / 180}
+            >
+              <Dimensions model={wardrobe} selected={dimensionedPart} />
+            </group>
+          ) : null}
 
           <ContactShadows
             position={[bounds.sceneCenter[0], bounds.floorY + 0.001, bounds.sceneCenter[2]]}

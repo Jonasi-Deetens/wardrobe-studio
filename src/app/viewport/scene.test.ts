@@ -17,7 +17,7 @@ describe("the exploded view separates parts rather than driving them together", 
   for (const preset of PRESETS) {
     it(preset.id, () => {
       const model = solve(preset.build());
-      const bounds = sceneBounds(model);
+      const bounds = sceneBounds(model.bounds);
 
       for (const factor of [0.15, 0.4, 0.7, 1]) {
         const boxes = model.parts.map((part) => {
@@ -44,7 +44,7 @@ describe("the exploded view separates parts rather than driving them together", 
 
   it("leaves nothing where it started", () => {
     const model = solve(PRESETS[0]!.build());
-    const bounds = sceneBounds(model);
+    const bounds = sceneBounds(model.bounds);
     const moved = model.parts.filter((part) => explodeOffset(part, bounds, 1).length() > 1);
     // Parts sitting on the centre of the wardrobe have nowhere to go, but almost
     // everything should have moved.

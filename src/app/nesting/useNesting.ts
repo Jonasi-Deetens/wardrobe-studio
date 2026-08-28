@@ -5,7 +5,7 @@ import {
   type NestPart,
   type NestResult,
 } from "@/engine/cutlist/nesting";
-import { useDerived } from "../store/derived";
+import { useProjectModel, useUnitScope } from "../store/derived";
 import type { NestRequest, NestResponse } from "./nesting.worker";
 
 /**
@@ -146,8 +146,9 @@ function requestNest(parts: readonly NestPart[], options: NestOptions): void {
 /* -------------------------------------------------------------------- hook - */
 
 export function useNesting(): NestingState {
-  const { model } = useDerived();
-  const production = model.spec.production;
+  const project = useProjectModel();
+  const scope = useUnitScope();
+  const production = project.spec.production;
 
   const options = useMemo<NestOptions>(
     () => ({
@@ -159,7 +160,10 @@ export function useNesting(): NestingState {
     [production.sheetSizeId, production.kerf, production.sheetTrim, production.grainPolicy],
   );
 
-  const parts = useMemo(() => nestablePartsOf(model.parts), [model.parts]);
+  /* Every unit in the room nests on the same sheets: two panels the same size in two
+     different units are two panels off one board, and that is where the saving is. The
+     unit filter narrows it when one unit is being cut on its own. */
+  const parts = useMemo(() => nestablePartsOf(scope.parts), [scope.parts]);
 
   useEffect(() => {
     requestNest(parts, options);

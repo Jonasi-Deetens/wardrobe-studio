@@ -4,7 +4,7 @@ import { buildCutList } from "@/engine/cutlist";
 import { modelToDxfFiles } from "@/engine/export/dxf";
 import { buildBooklet } from "@/engine/export/pdf";
 import { createZip } from "@/engine/export/zip";
-import { solve } from "@/engine/solver";
+import { cutListInputOf, scopeProject, solveProject } from "@/engine/project";
 import type { ExportJob, ExportRequest, ExportResponse } from "./export.worker";
 
 /**
@@ -104,19 +104,21 @@ export function useExportWorker(): (request: ExportJob) => Promise<ExportResult>
 }
 
 async function runOnMainThread(request: ExportJob): Promise<ExportResult> {
-  const model = solve(request.spec);
+  const project = scopeProject(solveProject(request.spec), request.unitId);
   if (request.kind === "dxf") {
-    const files = modelToDxfFiles(model.parts);
+    const files = modelToDxfFiles(project.parts, project.members);
     const bytes = createZip(
       files.map((file) => ({ name: file.filename, content: file.content })),
     );
     return { bytes, fileCount: files.length, onMainThread: true };
   }
   const bytes = await buildBooklet({
-    model,
-    cutList: buildCutList(model),
+    project,
+    cutList: buildCutList(cutListInputOf(project)),
     nest: request.nest,
-    findings: advise(model),
+    findings: project.units.flatMap((unit) =>
+      unit.detail.kind === "wardrobe" ? advise(unit.detail.model) : [],
+    ),
     views: request.views,
     sections: request.sections,
   });

@@ -11,7 +11,7 @@ import type { ReactNode } from "react";
 import type { Finding, Severity } from "@/engine/advisor";
 import { formatDim } from "@/engine/core/units";
 import { cn } from "@/lib/cn";
-import { useDerived } from "../store/derived";
+import { useDerived, useModel } from "../store/derived";
 import { useNesting } from "../nesting/useNesting";
 import { useStudio } from "../store/useStudio";
 import { Tooltip } from "../ui";
@@ -29,7 +29,9 @@ export function SummaryPanel({
   /** Called when a tap here changes what the work surface shows, so a drawer can close. */
   readonly onNavigate?: () => void;
 } = {}) {
-  const { model, cutList, findings } = useDerived();
+  const { cutList, findings } = useDerived();
+  /* The dimensions block describes the unit being edited; everything else is the room. */
+  const model = useModel();
   const nesting = useNesting();
   const selectPart = useStudio((state) => state.selectPart);
   const hoverParts = useStudio((state) => state.hoverParts);

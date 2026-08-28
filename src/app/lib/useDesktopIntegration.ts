@@ -155,8 +155,8 @@ export function useDesktopIntegration(): void {
        * can lose work by accident, and saving first is one keystroke away.
        */
       const unlistenClose = await getCurrentWindow().onCloseRequested(async (event) => {
-        const { spec, cleanSpec } = useStudio.getState();
-        if (spec === cleanSpec) return;
+        const { project, cleanProject } = useStudio.getState();
+        if (project === cleanProject) return;
         const { ask } = await import("@tauri-apps/plugin-dialog");
         const discard = await ask("This project has unsaved changes. Close anyway?", {
           title: "Unsaved changes",

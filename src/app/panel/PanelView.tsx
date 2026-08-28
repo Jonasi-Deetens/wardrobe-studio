@@ -9,7 +9,8 @@ import { cn } from "@/lib/cn";
 import { canPrintInPlace, revealFile, saveFile } from "../lib/platform";
 import { useBelow } from "../lib/useMediaQuery";
 import { DrawingCanvas } from "../drawing/DrawingCanvas";
-import { useDerived } from "../store/derived";
+import { UnitFilter } from "../shell/UnitFilter";
+import { useProjectModel, useUnitScope } from "../store/derived";
 import { useStudio } from "../store/useStudio";
 import { Button, SegmentedControl, Select, Tooltip } from "../ui";
 
@@ -22,7 +23,8 @@ import { Button, SegmentedControl, Select, Tooltip } from "../ui";
  * about to drill.
  */
 export function PanelView() {
-  const { model } = useDerived();
+  const project = useProjectModel();
+  const scope = useUnitScope();
   const selectedId = useStudio((state) => state.selectedPartId);
   const selectPart = useStudio((state) => state.selectPart);
   const face = useStudio((state) => state.selectedFace);
@@ -32,11 +34,14 @@ export function PanelView() {
   const stacked = useBelow("lg");
 
   const machined = useMemo(
-    () => model.parts.filter((part) => part.ops.length > 0),
-    [model.parts],
+    () => scope.parts.filter((part) => part.ops.length > 0),
+    [scope.parts],
   );
-  const list = machined.length > 0 ? machined : model.parts;
-  const part = (selectedId ? model.partsById.get(selectedId) : undefined) ?? list[0];
+  const list = machined.length > 0 ? machined : scope.parts;
+  /* The selection is room-wide, so a panel selected in 3D can belong to a unit the filter
+     has hidden. Falling back to the first panel in the list keeps the two in step. */
+  const selected = selectedId ? project.partsById.get(selectedId) : undefined;
+  const part = (selected && list.includes(selected) ? selected : undefined) ?? list[0];
 
   if (!part) {
     return (
@@ -133,6 +138,7 @@ export function PanelView() {
             </Button>
           </div>
           <div className="flex items-center gap-2">
+            <UnitFilter className="h-9 min-w-0 max-w-[140px] text-[13px]" />
             <p className="tabular min-w-0 flex-1 truncate text-[11px] text-faint">
               {PART_ROLE_LABELS[part.role]} · {part.thickness} thk ·{" "}
               {getMaterial(part.materialId).name}
@@ -175,9 +181,12 @@ export function PanelView() {
     <div className="grid h-full min-h-0 grid-cols-[220px_minmax(0,1fr)] xl:grid-cols-[240px_minmax(0,1fr)_280px]">
       {/* Panel list */}
       <aside className="ws-scroll min-h-0 overflow-y-auto border-r border-line bg-surface">
-        <h2 className="sticky top-0 z-10 border-b border-line bg-surface/95 px-3 py-2 text-[11px] font-medium tracking-wide text-muted uppercase backdrop-blur">
-          Panels · {list.length}
-        </h2>
+        <div className="sticky top-0 z-10 space-y-1.5 border-b border-line bg-surface/95 px-3 py-2 backdrop-blur">
+          <h2 className="text-[11px] font-medium tracking-wide text-muted uppercase">
+            Panels · {list.length}
+          </h2>
+          <UnitFilter className="w-full max-w-none" />
+        </div>
         <ul>
           {list.map((entry) => {
             const holes = entry.ops.filter(

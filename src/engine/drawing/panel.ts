@@ -3,6 +3,7 @@ import {
   OP_PURPOSE_LABELS,
   PANEL_EDGES,
   toolList,
+  type Fold,
   type Hole,
   type MachiningOp,
   type PanelEdge,
@@ -64,10 +65,16 @@ function project(part: Part, face: PanelFace, l: number, w: number): [number, nu
 }
 
 export function renderPanelDrawing(
-  part: Part,
+  input: Part,
   face: PanelFace,
   options: PanelDrawingOptions = DEFAULT_PANEL_DRAWING_OPTIONS,
 ): Drawing {
+  /* The drawing is of the thing you cut, which for a folded part is the flat blank rather
+     than the finished size. Swapping the two dimensions here once means every hole, fold,
+     dimension and datum below is already in blank coordinates. */
+  const part: Part = input.blank
+    ? { ...input, length: input.blank.length, width: input.blank.width }
+    : input;
   const primitives: Primitive[] = [];
   const material = getMaterial(part.materialId);
 
@@ -152,6 +159,12 @@ export function renderPanelDrawing(
     primitives.push(...edgeHoleMarks(part, face, op));
   }
 
+  /* ----------------------------------------------------------------- folds - */
+
+  for (const fold of part.folds ?? []) {
+    primitives.push(...foldMarks(part, face, fold));
+  }
+
   /* ------------------------------------------------------------ datum ----- */
 
   const datum = project(part, face, 0, 0);
@@ -202,14 +215,28 @@ export function renderPanelDrawing(
   /* ------------------------------------------------------------ title block */
 
   const tools = toolList(part);
+  const folded = (part.folds ?? []).length > 0;
   const lines: string[] = [
-    `${part.length} x ${part.width} x ${part.thickness} mm  ·  ${material.name}`,
+    `${part.length} x ${part.width} x ${part.thickness} mm${folded ? " FLAT BLANK" : ""}  ·  ${material.name}`,
     `Face ${face}${face === "B" ? " — shown flipped left to right about the width axis" : ""}  ·  grain ${part.grain === "none" ? "not directional" : `along the ${part.grain}`}`,
   ];
   if (tools.length > 0) {
     lines.push(
       `Tools: ${tools
         .map((t) => `Ø${formatMm(t.diameter)} x ${t.count}`)
+        .join("   ")}`,
+    );
+  }
+  if (folded) {
+    lines.push(
+      `Finished ${formatMm(input.length)} x ${formatMm(input.width)} after bending. The blank above includes the bend deduction, so cut it as drawn.`,
+    );
+    lines.push(
+      `Bends: ${(part.folds ?? [])
+        .map(
+          (fold) =>
+            `${formatMm(fold.at)} ${fold.direction} ${formatMm(fold.angle)}° r${formatMm(fold.radius)}`,
+        )
         .join("   ")}`,
     );
   }
@@ -448,6 +475,64 @@ function cutoutMarks(part: Part, face: PanelFace, op: Extract<MachiningOp, { kin
       style: style("cut", { strokeWidth: 0.5, dash: op.through ? undefined : [4, 2] }),
     },
   ];
+}
+
+/* ----------------------------------------------------------------- folds -- */
+
+/**
+ * A bend line, as a chain-dashed line right across the blank with an arrow saying which
+ * way it goes.
+ *
+ * Up or down is the whole question at the press brake, and getting it wrong on an upstand
+ * means scrapping the blank, so the direction is drawn as well as written: an arrow towards
+ * the flange for a fold up towards the viewer, away from it for a fold down.
+ */
+function foldMarks(part: Part, face: PanelFace, fold: Fold): Primitive[] {
+  /* Turning the panel over turns every bend the other way, and mirrors where it sits. */
+  const flipped = face === "B";
+  const crossesLength = fold.along === "width";
+  const at = crossesLength && flipped ? part.length - fold.at : fold.at;
+  const direction = flipped
+    ? fold.direction === "up"
+      ? "down"
+      : "up"
+    : fold.direction;
+
+  const s = style("fold", { strokeWidth: 0.45, dash: [12, 3, 2, 3] });
+  const out: Primitive[] = [
+    crossesLength
+      ? { kind: "line", x1: at, y1: 0, x2: at, y2: part.width, style: s }
+      : { kind: "line", x1: 0, y1: at, x2: part.length, y2: at, style: s },
+  ];
+
+  /* The arrow sits at the middle of the line and points into the flange, which is the
+     shorter side of the bend — that is the piece that moves. */
+  const towardsZero = crossesLength ? at < part.length / 2 : at < part.width / 2;
+  const sign = towardsZero ? -1 : 1;
+  const tip = 9;
+  const mid = crossesLength ? part.width / 2 : part.length / 2;
+  const head: [number, number] = crossesLength ? [at + sign * tip, mid] : [mid, at + sign * tip];
+  const tail: [number, number] = crossesLength ? [at, mid] : [mid, at];
+
+  out.push({
+    kind: "polyline",
+    points: [tail, head],
+    closed: false,
+    style: style("fold", { strokeWidth: 0.45 }),
+  });
+  out.push({
+    kind: "text",
+    x: crossesLength ? at : mid,
+    y: crossesLength ? mid : at,
+    text: `FOLD ${direction.toUpperCase()} ${formatMm(fold.angle)}°`,
+    size: SMALL,
+    anchor: "middle",
+    baseline: "bottom",
+    style: style("fold"),
+    ...(crossesLength ? { rotate: -90 } : {}),
+  });
+
+  return out;
 }
 
 /* ------------------------------------------------------------ edge holes -- */

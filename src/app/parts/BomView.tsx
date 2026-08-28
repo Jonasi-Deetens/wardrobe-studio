@@ -1,4 +1,5 @@
-import { useDerived } from "../store/derived";
+import { UnitFilter } from "../shell/UnitFilter";
+import { useUnitScope } from "../store/derived";
 
 const KIND_LABELS: Record<string, string> = {
   hinge: "Hinges",
@@ -18,7 +19,7 @@ const KIND_LABELS: Record<string, string> = {
  * stops the job.
  */
 export function BomView() {
-  const { cutList } = useDerived();
+  const { cutList } = useUnitScope();
 
   const groups = new Map<string, typeof cutList.bom>();
   for (const row of cutList.bom) {
@@ -34,6 +35,7 @@ export function BomView() {
         <span className="tabular text-[11.5px] text-faint">
           {cutList.bom.length} lines · {cutList.hardwareCost.toFixed(2)}
         </span>
+        <UnitFilter className="ml-auto h-9 sm:h-7" />
       </div>
 
       {[...groups.entries()].map(([kind, rows]) => (

@@ -11,9 +11,8 @@ import {
 import { getHandle, getRail, type HandleSpec } from "@/engine/catalog/hardware";
 import { toWorld, type Vec3 } from "@/engine/core/geometry";
 import type { Hole, OpPurpose, Part } from "@/engine/core/part";
-import type { WardrobeModel } from "@/engine/solver";
 import { useStudio } from "../store/useStudio";
-import type { PartTransform } from "./scene";
+import type { PartScene, PartTransform } from "./scene";
 
 /**
  * The hardware layer.
@@ -119,19 +118,19 @@ const FITTINGS: Partial<Record<OpPurpose, FittingLook>> = {
 };
 
 type HardwareProps = {
-  readonly model: WardrobeModel;
+  readonly scene: PartScene;
   readonly transforms: ReadonlyMap<string, PartTransform>;
 };
 
-export const Hardware = memo(function Hardware({ model, transforms }: HardwareProps) {
+export const Hardware = memo(function Hardware({ scene, transforms }: HardwareProps) {
   const show = useStudio((state) => state.view.showHardware);
   const showDoors = useStudio((state) => state.view.showDoors);
   const showBack = useStudio((state) => state.view.showBack);
   const isolateRole = useStudio((state) => state.view.isolateRole);
 
   const buckets = useMemo(
-    () => (show ? build(model, transforms, showDoors, showBack) : []),
-    [show, model, transforms, showDoors, showBack],
+    () => (show ? build(scene, transforms, showDoors, showBack) : []),
+    [show, scene, transforms, showDoors, showBack],
   );
 
   /* Isolating a role is about reading one panel; hardware at full opacity over dimmed
@@ -148,14 +147,14 @@ export const Hardware = memo(function Hardware({ model, transforms }: HardwarePr
 });
 
 function build(
-  model: WardrobeModel,
+  scene: PartScene,
   transforms: ReadonlyMap<string, PartTransform>,
   showDoors: boolean,
   showBack: boolean,
 ): Bucket[] {
   const buckets = new Map<string, Bucket>();
 
-  for (const rail of model.rails) {
+  for (const rail of scene.rails) {
     const spec = getRail(rail.railId);
     const centre = new Vector3((rail.x0 + rail.x1) / 2, rail.y, rail.z);
     /* An oval rail is not a cylinder, so the cross-section is scaled per axis rather
@@ -180,16 +179,15 @@ function build(
     }
   }
 
-  const doorHandle = getHandle(model.spec.handles.doorHandleId);
-  const drawerHandle = getHandle(model.spec.handles.drawerHandleId);
+  const doorHandle = scene.doorHandleId === null ? null : getHandle(scene.doorHandleId);
+  const drawerHandle = scene.drawerHandleId === null ? null : getHandle(scene.drawerHandleId);
 
-  for (const part of model.parts) {
+  for (const part of scene.parts) {
     if (hidden(part, showDoors, showBack)) continue;
     const offset = transforms.get(part.id)?.offset;
 
-    if (part.role === "door" || part.role === "drawer-front") {
-      addHandle(buckets, part, part.role === "door" ? doorHandle : drawerHandle, offset);
-    }
+    const handle = part.role === "door" ? doorHandle : part.role === "drawer-front" ? drawerHandle : null;
+    if (handle) addHandle(buckets, part, handle, offset);
 
     for (const op of part.ops) {
       if (op.kind !== "hole") continue;

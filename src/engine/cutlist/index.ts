@@ -1,8 +1,19 @@
 import { getBanding, getMaterial, getSheetSize, type Material } from "../catalog/materials";
-import { bandingLength, PANEL_EDGES, partSignature, type Part, type PanelEdge } from "../core/part";
+import type { Member, Weld } from "../core/member";
+import {
+  bandingLength,
+  cutSize,
+  faceArea,
+  PANEL_EDGES,
+  partSignature,
+  type Part,
+  type PanelEdge,
+} from "../core/part";
 import { mm2, mm2ToM2, mmToM } from "../core/units";
 import type { HardwareUse } from "../solver/draft";
 import type { WardrobeModel } from "../solver";
+import type { ProductionSpec } from "../spec/types";
+import { buildMetalSchedule, type MetalSchedule } from "./tube";
 
 /**
  * One line of the cut list. Identical panels collapse into a single row, but only
@@ -15,8 +26,12 @@ export type CutListRow = {
   readonly role: Part["role"];
   readonly label: string;
   readonly material: Material;
+  /** As-cut size. For a folded part this is the flat blank. */
   readonly length: number;
   readonly width: number;
+  /** Set only on a folded part: the size it ends up after bending. */
+  readonly finished?: { readonly length: number; readonly width: number };
+  readonly folded?: true;
   readonly thickness: number;
   readonly grain: Part["grain"];
   /** Banding name per edge, using the panel's own edge labels. */
@@ -25,6 +40,12 @@ export type CutListRow = {
   readonly holeCount: number;
   /** Every part this row stands for, so hovering a row can highlight them all. */
   readonly partIds: readonly string[];
+  /**
+   * Which units the parts came from. Identical panels in two units collapse into one row
+   * of quantity two — that is where the material saving is — so the row has to be able to
+   * say where they go.
+   */
+  readonly unitIds: readonly string[];
 };
 
 export type MaterialTotal = {
@@ -50,6 +71,8 @@ export type CutList = {
   readonly rows: readonly CutListRow[];
   readonly materialTotals: readonly MaterialTotal[];
   readonly bom: readonly BomRow[];
+  /** Tube schedule, bar nest and weld schedule. Empty for a project with no metalwork. */
+  readonly metal: MetalSchedule;
   readonly bandingTotals: readonly {
     readonly id: string;
     readonly name: string;
@@ -62,13 +85,40 @@ export type CutList = {
   readonly materialCost: number;
   readonly hardwareCost: number;
   readonly bandingCost: number;
+  /** Stock bars of tube, costed on the bars bought rather than the metres used. */
+  readonly metalCost: number;
   readonly labourCost: number;
   readonly totalCost: number;
 };
 
-export function buildCutList(model: WardrobeModel): CutList {
+/**
+ * What a cut list is made from. Deliberately not a model: one cut list covers a whole
+ * room, so it takes the panels, the metalwork and the hardware of every unit in it, and
+ * the shop's production settings, which belong to the project rather than to any unit.
+ */
+export type CutListInput = {
+  readonly parts: readonly Part[];
+  readonly members: readonly Member[];
+  readonly welds: readonly Weld[];
+  readonly hardware: readonly HardwareUse[];
+  readonly production: ProductionSpec;
+};
+
+/** One wardrobe on its own, which is what the solver's own tests and the advisor use. */
+export function cutListOfModel(model: WardrobeModel): CutList {
+  return buildCutList({
+    parts: model.parts,
+    members: [],
+    welds: [],
+    hardware: model.hardware,
+    production: model.spec.production,
+  });
+}
+
+export function buildCutList(input: CutListInput): CutList {
+  const { production } = input;
   const grouped = new Map<string, Part[]>();
-  for (const part of model.parts) {
+  for (const part of input.parts) {
     const key = partSignature(part);
     const bucket = grouped.get(key);
     if (bucket) bucket.push(part);
@@ -78,14 +128,20 @@ export function buildCutList(model: WardrobeModel): CutList {
   const rows: CutListRow[] = [...grouped.entries()].map(([key, parts]) => {
     const first = parts[0] as Part;
     const material = getMaterial(first.materialId);
+    /* A folded part is cut to its blank, so that is the size that goes on the list; the
+       finished size travels alongside it, because that is what has to fit. */
+    const size = cutSize(first);
     return {
       key,
       quantity: parts.length,
       role: first.role,
       label: parts.length === 1 ? first.label : commonLabel(parts),
       material,
-      length: first.length,
-      width: first.width,
+      length: size.length,
+      width: size.width,
+      ...(first.blank
+        ? { finished: { length: first.length, width: first.width }, folded: true as const }
+        : {}),
       thickness: first.thickness,
       grain: first.grain,
       banding: PANEL_EDGES.filter((edge) => first.banding[edge]).map((edge) => ({
@@ -98,6 +154,7 @@ export function buildCutList(model: WardrobeModel): CutList {
         (op) => op.kind === "hole" || op.kind === "edge-hole",
       ).length,
       partIds: parts.map((p) => p.id),
+      unitIds: [...new Set(parts.map((p) => p.unitId).filter((id): id is string => !!id))],
     };
   });
 
@@ -109,38 +166,42 @@ export function buildCutList(model: WardrobeModel): CutList {
       b.width - a.width,
   );
 
-  const materialTotals = buildMaterialTotals(model, rows);
-  const bandingTotals = buildBandingTotals(model);
-  const bom = buildBom(model.hardware);
+  const materialTotals = buildMaterialTotals(production, rows);
+  const bandingTotals = buildBandingTotals(input.parts);
+  const bom = buildBom(input.hardware);
+  const metal = buildMetalSchedule(input.members, input.welds, production);
 
   const materialCost = materialTotals.reduce((sum, t) => sum + t.cost, 0);
   const bandingCost = bandingTotals.reduce((sum, t) => sum + t.cost, 0);
   const hardwareCost = bom.reduce((sum, r) => sum + r.total, 0);
-  const labourCost = mm2(
-    (model.parts.length * model.spec.production.minutesPerPanel * model.spec.production.labourRate) /
-      60,
-  );
+  /* Panels are cut, banded and drilled; tube is cut and then welded, and the welding is
+     the slower half of a metal-framed unit. */
+  const minutes =
+    input.parts.length * production.minutesPerPanel +
+    input.members.length * production.minutesPerMember +
+    input.welds.length * production.minutesPerWeld;
+  const labourCost = mm2((minutes * production.labourRate) / 60);
 
   return {
     rows,
     materialTotals,
     bom,
+    metal,
     bandingTotals,
-    partCount: model.parts.length,
-    holeCount: model.parts.reduce(
+    partCount: input.parts.length,
+    holeCount: input.parts.reduce(
       (sum, part) =>
         sum +
         part.ops.filter((op) => op.kind === "hole" || op.kind === "edge-hole").length,
       0,
     ),
-    panelArea: mm2(
-      model.parts.reduce((sum, part) => sum + mm2ToM2(part.length * part.width), 0) * 100,
-    ) / 100,
+    panelArea: mm2(input.parts.reduce((sum, part) => sum + mm2ToM2(faceArea(part)), 0) * 100) / 100,
     materialCost: mm2(materialCost),
     hardwareCost: mm2(hardwareCost),
     bandingCost: mm2(bandingCost),
+    metalCost: metal.cost,
     labourCost,
-    totalCost: mm2(materialCost + bandingCost + hardwareCost + labourCost),
+    totalCost: mm2(materialCost + bandingCost + hardwareCost + metal.cost + labourCost),
   };
 }
 
@@ -166,12 +227,15 @@ function commonLabel(parts: readonly Part[]): string {
  * has a number before nesting has finished in its worker.
  */
 function buildMaterialTotals(
-  model: WardrobeModel,
+  production: ProductionSpec,
   rows: readonly CutListRow[],
 ): MaterialTotal[] {
-  const sheet = getSheetSize(model.spec.production.sheetSizeId);
-  const usable = (sheet.length - 2 * model.spec.production.sheetTrim) *
-    (sheet.width - 2 * model.spec.production.sheetTrim);
+  const usableAreaOf = (material: Material): number => {
+    const sheet = getSheetSize(material.sheetSizeId ?? production.sheetSizeId);
+    return (
+      (sheet.length - 2 * production.sheetTrim) * (sheet.width - 2 * production.sheetTrim)
+    );
+  };
 
   const byMaterial = new Map<string, { material: Material; area: number; count: number }>();
   for (const row of rows) {
@@ -188,7 +252,7 @@ function buildMaterialTotals(
   return [...byMaterial.values()]
     .map(({ material, area, count }) => {
       // 15% is a realistic allowance for offcuts before a real nesting run.
-      const sheetsNeeded = Math.ceil((area * 1.15) / usable);
+      const sheetsNeeded = Math.ceil((area * 1.15) / usableAreaOf(material));
       return {
         material,
         partCount: count,
@@ -200,13 +264,14 @@ function buildMaterialTotals(
     .sort((a, b) => b.area - a.area);
 }
 
-function buildBandingTotals(model: WardrobeModel) {
+function buildBandingTotals(parts: readonly Part[]) {
   const byId = new Map<string, number>();
-  for (const part of model.parts) {
+  for (const part of parts) {
     for (const edge of PANEL_EDGES) {
       const id = part.banding[edge];
       if (!id) continue;
-      const length = edge === "l0" || edge === "l1" ? part.width : part.length;
+      const size = cutSize(part);
+      const length = edge === "l0" || edge === "l1" ? size.width : size.length;
       byId.set(id, (byId.get(id) ?? 0) + length);
     }
   }
@@ -283,8 +348,8 @@ function buildBom(hardware: readonly HardwareUse[]): BomRow[] {
  * the number in the bill of materials can never drift from the number of holes on
  * the drawings.
  */
-export function countConnectors(model: WardrobeModel): number {
-  return model.parts.reduce(
+export function countConnectors(parts: readonly Part[]): number {
+  return parts.reduce(
     (sum, part) =>
       sum +
       part.ops.filter(

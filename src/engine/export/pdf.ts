@@ -9,18 +9,32 @@ import {
   type RGB,
 } from "pdf-lib";
 import { buildAssemblySequence } from "../assembly";
-import { getMaterial } from "../catalog/materials";
+import { getBanding, getMaterial } from "../catalog/materials";
 import type { CutList } from "../cutlist";
 import type { NestResult } from "../cutlist/nesting";
 import type { Finding } from "../advisor";
+import { endLabel } from "../cutlist/tube";
+import { renderMemberElevation } from "../drawing/member";
 import { renderPanelDrawing } from "../drawing/panel";
+import { renderRoomPlan } from "../drawing/plan";
 import { renderSheetDrawing } from "../drawing/sheet";
 import type { Drawing, Layer, Primitive } from "../drawing/types";
-import { partSignature } from "../core/part";
+import { partSignature, type Part } from "../core/part";
 import { formatDim } from "../core/units";
-import { CARCASE_CONSTRUCTION_LABELS, FITTING_LABELS } from "../spec/types";
+import type { ProjectModel, UnitModel } from "../project";
+import { getProfile } from "../catalog/profiles";
+import { describeCounter, type CounterModel } from "../counter";
+import {
+  CARCASE_CONSTRUCTION_LABELS,
+  CLADDING_STYLE_LABELS,
+  COUNTER_TOP_LABELS,
+  FITTING_LABELS,
+  WORK_TABLE_EDGE_LABELS,
+  WORK_TABLE_FEET_LABELS,
+} from "../spec/types";
 import { collectBays } from "../spec/types";
 import type { WardrobeModel } from "../solver";
+import { describeWorkTable, type WorkTableModel } from "../table";
 
 /**
  * The shop booklet.
@@ -28,6 +42,11 @@ import type { WardrobeModel } from "../solver";
  * It draws the same `Drawing` primitives the screen uses, rather than rasterising the
  * SVG, so a hole on paper is at the coordinate the engine computed — no intermediate
  * image, no resampling, and the print stays vector-sharp at any size.
+ *
+ * One booklet covers a whole room: a cover with the plan and the unit list, then a
+ * specification and an assembly sequence per unit — because a unit is what somebody
+ * actually builds — and then the material sections room-wide, because the sheets, the
+ * cutting diagrams and the hardware are ordered and cut for the room in one go.
  */
 
 const MM = 2.834645669291339;
@@ -55,6 +74,7 @@ const LAYER_INK: Partial<Record<Layer, RGB>> = {
   annotation: rgb(0.05, 0.05, 0.05),
   datum: rgb(0, 0, 0),
   hidden: rgb(0.7, 0.7, 0.7),
+  fold: rgb(0.15, 0.15, 0.15),
 };
 
 type Fonts = { readonly regular: PDFFont; readonly bold: PDFFont; readonly mono: PDFFont };
@@ -124,7 +144,7 @@ export type BookletView = {
 };
 
 export type BookletInput = {
-  readonly model: WardrobeModel;
+  readonly project: ProjectModel;
   readonly cutList: CutList;
   readonly nest: NestResult | null;
   readonly findings: readonly Finding[];
@@ -146,7 +166,7 @@ export async function buildBooklet(input: BookletInput): Promise<Uint8Array> {
     mono: await doc.embedFont(StandardFonts.Courier),
   };
 
-  const { model, cutList, nest, findings } = input;
+  const { project, cutList, nest, findings } = input;
   const sections = {
     cuttingDiagrams: true,
     panelPages: true,
@@ -159,7 +179,7 @@ export async function buildBooklet(input: BookletInput): Promise<Uint8Array> {
     doc,
     fonts,
     sheets: [],
-    title: model.spec.meta.name || "Wardrobe",
+    title: project.spec.meta.name || "Wardrobe",
   };
 
   doc.setTitle(`${booklet.title} — shop booklet`);
@@ -177,13 +197,26 @@ export async function buildBooklet(input: BookletInput): Promise<Uint8Array> {
   }
 
   await coverPage(booklet, input, images);
-  specPage(booklet, input);
+  for (const unit of project.units) {
+    if (unit.detail.kind === "work-table") {
+      tableSpecPage(booklet, unit, unit.detail.model, findingsFor(findings, unit));
+      continue;
+    }
+    if (unit.detail.kind === "counter") {
+      counterSpecPage(booklet, unit, unit.detail.model, findingsFor(findings, unit));
+      continue;
+    }
+    const model = wardrobeOf(unit);
+    if (!model) continue;
+    specPage(booklet, input, unit, model);
+    if (sections.assembly) assemblyPages(booklet, unit, model, findingsFor(findings, unit));
+  }
   cutListPages(booklet, input);
   if (sections.cuttingDiagrams && nest) nestingPages(booklet, nest);
+  if (cutList.metal.memberCount > 0) metalPages(booklet, input);
   hardwarePage(booklet, cutList);
-  if (sections.assembly) assemblyPages(booklet, model, findings);
-  if (sections.panelPages) panelPages(booklet, model);
-  if (sections.drillingTable) drillingPages(booklet, model);
+  if (sections.panelPages) panelPages(booklet, project);
+  if (sections.drillingTable) drillingPages(booklet, project);
 
   paginate(booklet);
 
@@ -192,14 +225,27 @@ export async function buildBooklet(input: BookletInput): Promise<Uint8Array> {
 
 /* ------------------------------------------------------------------- pages - */
 
+function wardrobeOf(unit: UnitModel): WardrobeModel | null {
+  return unit.detail.kind === "wardrobe" ? unit.detail.model : null;
+}
+
+/** A unit's own findings. Room-level ones carry no unit and belong on the cover. */
+function findingsFor(findings: readonly Finding[], unit: UnitModel): Finding[] {
+  return findings.filter(
+    (finding) =>
+      finding.unitId === unit.id ||
+      (finding.unitId === undefined && finding.id.startsWith(`${unit.id}:`)),
+  );
+}
+
 async function coverPage(
   booklet: Booklet,
   input: BookletInput,
   images: readonly PDFImage[],
 ): Promise<void> {
   const sheet = addSheet(booklet, false);
-  const { model, cutList, findings } = input;
-  const spec = model.spec;
+  const { project, cutList, findings } = input;
+  const room = project.room.spec;
   const inner = contentWidth(sheet);
 
   drawText(sheet, booklet.fonts.bold, "WARDROBE STUDIO", {
@@ -219,7 +265,7 @@ async function coverPage(
   });
   sheet.y += 11;
 
-  const dims = `${formatDim(spec.carcase.width)} wide × ${formatDim(spec.carcase.height)} high × ${formatDim(spec.carcase.depth)} deep`;
+  const dims = `Room ${formatDim(room.width)} wide × ${formatDim(room.height)} high × ${formatDim(room.depth)} deep · ${project.units.length} unit${project.units.length === 1 ? "" : "s"}`;
   drawText(sheet, booklet.fonts.regular, dims, {
     x: MARGIN.left,
     y: sheet.y,
@@ -261,6 +307,18 @@ async function coverPage(
     sheet.y += boxHeight + 8;
   }
 
+  /* The plan, so the booklet says where each unit stands before it says how to build it. */
+  const planHeight = images.length > 0 ? 48 : 74;
+  placeDrawing(booklet, sheet, renderRoomPlan(project), {
+    x: MARGIN.left,
+    y: sheet.y,
+    width: inner,
+    height: planHeight,
+  });
+  sheet.y += planHeight + 6;
+  rule(sheet, MARGIN.left, sheet.y, inner);
+  sheet.y += 6;
+
   /* Headline numbers. The four a shop actually asks for before starting. */
   const stats: [string, string][] = [
     ["Panels", String(cutList.partCount)],
@@ -288,14 +346,18 @@ async function coverPage(
   const colWidth = (inner - 8) / 2;
   const startY = sheet.y;
 
-  drawText(sheet, booklet.fonts.bold, "This build", {
+  drawText(sheet, booklet.fonts.bold, "Units in this room", {
     x: MARGIN.left,
     y: sheet.y,
     size: 3.4,
     color: INK,
   });
   let leftY = sheet.y + 6;
-  for (const [label, value] of coverFacts(model)) {
+  for (const unit of project.units) {
+    leftY = keyValue(sheet, booklet.fonts, unit.name, unitSummary(unit), MARGIN.left, leftY, colWidth);
+  }
+  leftY += 2;
+  for (const [label, value] of roomFacts(project)) {
     leftY = keyValue(sheet, booklet.fonts, label, value, MARGIN.left, leftY, colWidth);
   }
 
@@ -351,7 +413,25 @@ async function coverPage(
   });
 }
 
-function coverFacts(model: WardrobeModel): [string, string][] {
+/** One line per unit on the cover: what it is, how big, and where it stands. */
+function unitSummary(unit: UnitModel): string {
+  const size = unit.localBounds;
+  const dims = `${formatDim(size.max[0] - size.min[0])} × ${formatDim(size.max[1] - size.min[1])} × ${formatDim(size.max[2] - size.min[2])}`;
+  const at = `at ${formatDim(unit.at.x)}, ${formatDim(unit.at.z)}`;
+  return `${dims} ${at}${unit.at.yaw ? `, turned ${unit.at.yaw}°` : ""} · ${unit.parts.length} panels`;
+}
+
+function roomFacts(project: ProjectModel): [string, string][] {
+  const room = project.room.spec;
+  const facts: [string, string][] = [
+    ["Roof", room.roof.kind === "flat" ? "Flat" : `${room.roof.kind}, ${room.roof.pitch}° on ${room.roof.slopeAxis}`],
+    ["Openings", room.openings.length === 0 ? "None" : `${room.openings.length}`],
+    ["Walls", `${formatDim(room.wallThickness)} thick`],
+  ];
+  return facts;
+}
+
+function unitFacts(model: WardrobeModel): [string, string][] {
   const spec = model.spec;
   const bays = collectBays(spec.layout);
   const fittings = [...new Set(bays.map((bay) => FITTING_LABELS[bay.fitting.kind]))];
@@ -373,11 +453,21 @@ function coverFacts(model: WardrobeModel): [string, string][] {
   return facts;
 }
 
-function specPage(booklet: Booklet, input: BookletInput): void {
+function specPage(
+  booklet: Booklet,
+  input: BookletInput,
+  unit: UnitModel,
+  model: WardrobeModel,
+): void {
   const sheet = addSheet(booklet, false);
-  const { model, cutList, findings } = input;
+  const { cutList, findings } = input;
   const spec = model.spec;
-  heading(booklet, sheet, "Specification");
+  heading(
+    booklet,
+    sheet,
+    `${unit.name} — specification`,
+    unitSummary(unit),
+  );
 
   const inner = contentWidth(sheet);
   const colWidth = (inner - 8) / 2;
@@ -439,6 +529,9 @@ function specPage(booklet: Booklet, input: BookletInput): void {
     ],
   ];
 
+  const skin = claddingGroup(unit);
+  if (skin) groups.push(skin);
+
   let columnY = [sheet.y, sheet.y];
   groups.forEach((group, index) => {
     const column = index % 2;
@@ -454,27 +547,15 @@ function specPage(booklet: Booklet, input: BookletInput): void {
 
   sheet.y = Math.max(...columnY);
 
-  /* Cost estimate, and the advice list in full. */
-  if (sheet.y > sheet.height - MARGIN.bottom - 60) {
-    sheet.y = MARGIN.top;
-    addSheet(booklet, false);
-  }
-
-  const costs: [string, string][] = [
-    ["Sheet material", cutList.materialCost.toFixed(2)],
-    ["Edge banding", cutList.bandingCost.toFixed(2)],
-    ["Hardware", cutList.hardwareCost.toFixed(2)],
-    ["Labour", cutList.labourCost.toFixed(2)],
-    ["Total", cutList.totalCost.toFixed(2)],
-  ];
-  drawText(sheet, booklet.fonts.bold, "Estimate", {
+  /* What the unit comes out as, then anything the advisor flagged about it. */
+  drawText(sheet, booklet.fonts.bold, "As built", {
     x: MARGIN.left,
     y: sheet.y,
     size: 3.2,
     color: ACCENT,
   });
   sheet.y += 5;
-  for (const [label, value] of costs) {
+  for (const [label, value] of unitFacts(model)) {
     sheet.y = keyValue(sheet, booklet.fonts, label, value, MARGIN.left, sheet.y, colWidth);
   }
   sheet.y += 6;
@@ -524,6 +605,296 @@ function specPage(booklet: Booklet, input: BookletInput): void {
   }
 }
 
+/**
+ * A work table's specification and how it goes together.
+ *
+ * It reads differently from a wardrobe on purpose: a table is a folded top on a welded frame,
+ * so what matters is the fold sizes, the leg section and the order the welding happens in,
+ * not bays and hinges.
+ */
+function tableSpecPage(
+  booklet: Booklet,
+  unit: UnitModel,
+  model: WorkTableModel,
+  findings: readonly Finding[],
+): void {
+  const sheet = addSheet(booklet, false);
+  const spec = model.spec;
+  const top = getMaterial(spec.top.materialId);
+  const leg = getProfile(spec.legs.profileId);
+  heading(booklet, sheet, `${unit.name} — specification`, describeWorkTable(spec));
+
+  const inner = contentWidth(sheet);
+  const colWidth = (inner - 8) / 2;
+  const blank = model.parts.find((part) => part.role === "worktop");
+
+  const groups: [string, [string, string][]][] = [
+    [
+      "Top",
+      [
+        ["Finished size", `${spec.width} × ${spec.depth}`],
+        ["Height to the surface", `${spec.height} mm`],
+        ["Sheet", `${top.name}, ${top.thickness} mm`],
+        ["Edge", `${WORK_TABLE_EDGE_LABELS[spec.top.edge]}${spec.top.edge === "square" ? "" : `, ${spec.top.edgeReturn} mm return`}`],
+        [
+          "Upstand",
+          spec.top.upstand === 0
+            ? "None"
+            : `${spec.top.upstand} mm, folded from the same sheet${spec.top.upstandReturn > 0 ? `, ${spec.top.upstandReturn} mm turned back at the top` : ""}`,
+        ],
+        [
+          "Flat blank",
+          blank?.blank ? `${formatDim(blank.blank.length)} × ${formatDim(blank.blank.width)}` : "—",
+        ],
+        ["Bends", String(blank?.folds?.length ?? 0)],
+      ],
+    ],
+    [
+      "Frame",
+      [
+        ["Leg section", leg.name],
+        ["Rails", `Same section, welded between the legs`],
+        ["Leg inset from the edge", `${spec.legs.inset} mm`],
+        ["Cross bracing", spec.legs.braced ? "Yes, at both ends" : "No"],
+        ["Feet", WORK_TABLE_FEET_LABELS[spec.legs.feet]],
+        ["Welds", `${model.welds.length}, ${spec.groundWelds ? "ground flush and re-brushed" : "left as welded"}`],
+        ["Clear under the frame", formatDim(model.clearUnder)],
+      ],
+    ],
+    [
+      "Undershelves",
+      model.shelfHeights.length === 0
+        ? [["Shelves", "None"]]
+        : [
+            ["Count", String(model.shelfHeights.length)],
+            ["Material", getMaterial(spec.shelves.materialId).name],
+            ["Heights above the floor", model.shelfHeights.map((y) => formatDim(y)).join(", ")],
+            [
+              "Edges",
+              spec.shelves.edgeReturn > 0
+                ? `Turned down ${spec.shelves.edgeReturn} mm`
+                : "Flat, no return",
+            ],
+          ],
+    ],
+    [
+      "Fabrication order",
+      [
+        ["1", "Cut and notch the top blank, then fold it on the brake."],
+        ["2", "Weld the notched corners of the top, grind and re-brush."],
+        ["3", "Cut the legs and rails to the tube schedule, checking the mitre angles."],
+        ["4", "Weld the two end frames flat on the bench, then join them with the long rails."],
+        ["5", spec.groundWelds ? "Grind every visible weld flush and re-brush the frame." : "Dress the welds enough to be safe to handle."],
+        ["6", "Fit the feet, stand the frame up and level it, then bolt the top down."],
+      ],
+    ],
+  ];
+
+  const skin = claddingGroup(unit);
+  if (skin) groups.push(skin);
+
+  layOutGroups(booklet, sheet, groups, colWidth);
+  drawFindings(booklet, sheet, findings, inner);
+}
+
+/**
+ * A counter's specification.
+ *
+ * The order is the order it gets built in: the frame that carries everything, then the top
+ * that goes on it, then what hangs inside.
+ */
+function counterSpecPage(
+  booklet: Booklet,
+  unit: UnitModel,
+  model: CounterModel,
+  findings: readonly Finding[],
+): void {
+  const sheet = addSheet(booklet, false);
+  const spec = model.spec;
+  const profile = getProfile(spec.frame.profileId);
+  const top = getMaterial(spec.top.materialId);
+  heading(booklet, sheet, `${unit.name} — specification`, describeCounter(spec));
+
+  const inner = contentWidth(sheet);
+  const colWidth = (inner - 8) / 2;
+
+  const groups: [string, [string, string][]][] = [
+    [
+      "Frame",
+      [
+        ["Section", profile.name],
+        ["Height under the top", formatDim(model.frameTop)],
+        ["Set in from the top", `${spec.frame.inset} mm`],
+        ["Bottom rail", `${spec.frame.bottomRail} mm above the floor`],
+        ["Cross bracing", spec.frame.braced ? "Yes, at both ends" : "No"],
+        ["Feet", WORK_TABLE_FEET_LABELS[spec.frame.feet]],
+        ["Welds", `${model.welds.length}, ${spec.groundWelds ? "ground flush" : "left as welded"}`],
+      ],
+    ],
+    [
+      "Top",
+      [
+        ["Overall", `${spec.width} × ${spec.depth}`],
+        ["Height to the surface", `${spec.height} mm`],
+        ["Kind", COUNTER_TOP_LABELS[spec.top.kind]],
+        ["Material", `${top.name}, ${top.thickness} mm`],
+        ["Overhang", `front ${spec.top.frontOverhang} · ends ${spec.top.endOverhang} · back ${spec.top.backOverhang}`],
+        ["Edging", spec.top.kind === "panel" ? getBanding(spec.top.bandingId).name : "Folded, no edging"],
+        ["Bar shelf", model.barY === null ? "None" : `${formatDim(model.barY)} high, ${spec.bar.depth} deep`],
+      ],
+    ],
+    [
+      "Inside the frame",
+      [
+        [
+          "Drawer bank",
+          spec.drawerBank.enabled && model.drawers.length > 0
+            ? `${model.drawers.length} drawers, ${spec.drawerBank.width} wide, ${spec.drawerBank.fromLeft} from the left`
+            : "None",
+        ],
+        ...(spec.drawerBank.enabled && model.drawers.length > 0
+          ? ([
+              ["Runner", spec.drawerBank.slideId],
+              ["Carcase", getMaterial(spec.drawerBank.carcaseMaterialId).name],
+              ["Fronts", getMaterial(spec.drawerBank.frontMaterialId).name],
+              ["Handle", spec.drawerBank.handleId],
+            ] as [string, string][])
+          : []),
+        [
+          "Shelves",
+          model.shelfHeights.length === 0
+            ? "None"
+            : `${model.shelfHeights.length} at ${model.shelfHeights.map((y) => formatDim(y)).join(", ")}`,
+        ],
+        ...(model.shelfHeights.length > 0
+          ? ([
+              ["Shelf material", getMaterial(spec.shelves.materialId).name],
+              ["Set back", `${spec.shelves.setback} mm from the front`],
+            ] as [string, string][])
+          : []),
+      ],
+    ],
+    [
+      "Fabrication order",
+      [
+        ["1", "Cut the frame to the tube schedule and weld the two end frames flat on the bench."],
+        ["2", "Join the ends with the long rails, checking the diagonals before the last weld cools."],
+        ["3", "Add the shelf rings, then the braces, then the bar posts if there are any."],
+        ["4", spec.groundWelds ? "Grind every visible weld flush." : "Dress the welds enough to be safe to handle."],
+        ["5", "Fit the feet, stand it up and level it before anything is screwed to it."],
+        ["6", "Screw the top down from underneath, then drop in the drawer bank and the shelves."],
+      ],
+    ],
+  ];
+
+  const skin = claddingGroup(unit);
+  if (skin) groups.push(skin);
+
+  layOutGroups(booklet, sheet, groups, colWidth);
+  drawFindings(booklet, sheet, findings, inner);
+}
+
+/**
+ * The cladding block, for whichever kind of unit is being specified.
+ *
+ * Cladding is fixed on last by whoever is on site, so it is worth stating separately from
+ * the thing it covers: the boards, what they fix to, and the cavity behind them.
+ */
+function claddingGroup(unit: UnitModel): [string, [string, string][]] | null {
+  const spec = unit.spec.cladding;
+  if (spec.style === "none") return null;
+  const boards = unit.parts.filter((part) => part.role === "cladding");
+  const battens = unit.parts.filter((part) => part.role === "batten");
+
+  return [
+    "Cladding",
+    [
+      ["Style", CLADDING_STYLE_LABELS[spec.style]],
+      ["Faces", spec.faces.join(", ")],
+      ["Material", getMaterial(spec.materialId).name],
+      [
+        "Boards",
+        `${boards.length} at ${spec.pieceWidth} wide, ${spec.direction}${
+          spec.style === "slats" && spec.gap > 0 ? `, ${spec.gap} gap` : ""
+        }`,
+      ],
+      [
+        "Battens",
+        battens.length === 0
+          ? "None: fixed straight onto the unit"
+          : `${battens.length} at ${spec.standoff} deep, ventilated cavity behind`,
+      ],
+      ["Fixing", spec.fixing],
+      ["Rise above the top", spec.riseAboveTop === 0 ? "Flush" : `${spec.riseAboveTop} mm`],
+    ],
+  ];
+}
+
+/** Two columns of key-value groups, filled in reading order. */
+function layOutGroups(
+  booklet: Booklet,
+  sheet: Sheet,
+  groups: readonly [string, [string, string][]][],
+  colWidth: number,
+): void {
+  const columnY = [sheet.y, sheet.y];
+  groups.forEach((group, index) => {
+    const column = index % 2;
+    const x = MARGIN.left + column * (colWidth + 8);
+    let y = columnY[column] as number;
+    drawText(sheet, booklet.fonts.bold, group[0], { x, y, size: 3.2, color: ACCENT });
+    y += 5;
+    for (const [label, value] of group[1]) {
+      y = keyValue(sheet, booklet.fonts, label, value, x, y, colWidth);
+    }
+    columnY[column] = y + 6;
+  });
+  sheet.y = Math.max(...columnY);
+}
+
+function drawFindings(
+  booklet: Booklet,
+  sheet: Sheet,
+  findings: readonly Finding[],
+  width: number,
+): void {
+  if (findings.length === 0) return;
+  drawText(sheet, booklet.fonts.bold, "Advice and warnings", {
+    x: MARGIN.left,
+    y: sheet.y,
+    size: 3.2,
+    color: ACCENT,
+  });
+  sheet.y += 5;
+  for (const finding of findings) {
+    const color =
+      finding.severity === "error" ? ERROR : finding.severity === "warning" ? WARN : MUTED;
+    sheet.page.drawRectangle({
+      x: MARGIN.left * MM,
+      y: (sheet.height - sheet.y - 3.6) * MM,
+      width: 1.1 * MM,
+      height: 3.6 * MM,
+      color,
+    });
+    drawText(sheet, booklet.fonts.bold, finding.title, {
+      x: MARGIN.left + 3,
+      y: sheet.y,
+      size: 3,
+      color: INK,
+    });
+    sheet.y += 4.2;
+    sheet.y = wrapText(sheet, booklet.fonts.regular, finding.detail, {
+      x: MARGIN.left + 3,
+      y: sheet.y,
+      width: width - 3,
+      size: 2.8,
+      color: MUTED,
+      lineHeight: 3.8,
+    });
+    sheet.y += 2.4;
+  }
+}
+
 /** The advice list is long; give it a fresh page rather than a cramped tail. */
 function findingsSheet(booklet: Booklet, sheet: Sheet): Sheet {
   if (sheet.y < sheet.height - MARGIN.bottom - 70) return sheet;
@@ -533,24 +904,31 @@ function findingsSheet(booklet: Booklet, sheet: Sheet): Sheet {
 }
 
 function cutListPages(booklet: Booklet, input: BookletInput): void {
-  const { cutList } = input;
+  const { cutList, project } = input;
+  /* One list for the room. Identical panels from two units collapse into one row, so the
+     row has to say which units it feeds or the panels cannot be sorted after cutting. */
+  const several = project.units.length > 1;
   const columns: Column[] = [
     { header: "Qty", width: 10, align: "end" },
-    { header: "Part", width: 48 },
-    { header: "Material", width: 28 },
+    { header: "Part", width: several ? 40 : 48 },
+    ...(several ? [{ header: "Units", width: 26 } satisfies Column] : []),
+    { header: "Material", width: 26 },
     { header: "Length", width: 15, align: "end" },
     { header: "Width", width: 15, align: "end" },
     { header: "Thk", width: 11, align: "end" },
-    { header: "Grain", width: 20 },
-    { header: "Banding (L0/L1/W0/W1)", width: 26 },
+    { header: "Grain", width: several ? 14 : 20 },
+    { header: "Banding (L0/L1/W0/W1)", width: 25 },
     { header: "Holes", width: 10, align: "end" },
   ];
+
+  const nameOf = (id: string): string => project.unitsById.get(id)?.name ?? id;
 
   const rows = cutList.rows.map((row) => {
     const band = (edge: string) => (row.banding.some((b) => b.edge === edge) ? "•" : "–");
     return [
       String(row.quantity),
       row.label,
+      ...(several ? [row.unitIds.map(nameOf).join(", ")] : []),
       row.material.shortName,
       String(row.length),
       String(row.width),
@@ -563,7 +941,7 @@ function cutListPages(booklet: Booklet, input: BookletInput): void {
 
   const sheet = table(booklet, {
     title: "Cut list",
-    subtitle: `${cutList.partCount} panels · dimensions are as-cut, edge banding already deducted`,
+    subtitle: `${cutList.partCount} panels across ${project.units.length} unit${several ? "s" : ""} · dimensions are as-cut, edge banding already deducted`,
     columns,
     rows,
     landscape: false,
@@ -577,6 +955,9 @@ function cutListPages(booklet: Booklet, input: BookletInput): void {
         `${total.material.name}: ${total.partCount} panels, ${total.area.toFixed(2)} m², ${total.sheetsNeeded} sheet${total.sheetsNeeded === 1 ? "" : "s"}`,
     ),
     ...cutList.bandingTotals.map((total) => `${total.name}: ${total.metres.toFixed(1)} m`),
+    "",
+    `Sheet material ${cutList.materialCost.toFixed(2)} · banding ${cutList.bandingCost.toFixed(2)} · hardware ${cutList.hardwareCost.toFixed(2)} · labour ${cutList.labourCost.toFixed(2)}`,
+    `Estimated total ${cutList.totalCost.toFixed(2)}`,
   ];
   if (sheet.y > sheet.height - MARGIN.bottom - lines.length * 4 - 10) {
     const next = addSheet(booklet, false);
@@ -651,6 +1032,156 @@ function nestingPages(booklet: Booklet, nest: NestResult): void {
   }
 }
 
+/**
+ * The metal sections: what to cut, how it nests into bars, what gets welded, and an
+ * elevation of every distinct piece.
+ *
+ * Kept as its own run of pages rather than folded into the cut list, because it is a
+ * different trade and often a different day: the frames are welded up first and the panels
+ * go on afterwards.
+ */
+function metalPages(booklet: Booklet, input: BookletInput): void {
+  const { metal } = input.cutList;
+  const project = input.project;
+  const several = project.units.length > 1;
+  const nameOf = (id: string): string => project.unitsById.get(id)?.name ?? id;
+
+  const sheet = table(booklet, {
+    title: "Tube schedule",
+    subtitle:
+      "Cut lengths are long point to long point. Both end cuts are given, because a mitred length means nothing without them",
+    columns: [
+      { header: "Qty", width: 10, align: "end" },
+      { header: "Member", width: several ? 38 : 46 },
+      ...(several ? [{ header: "Units", width: 24 } satisfies Column] : []),
+      { header: "Section", width: 34 },
+      { header: "Length", width: 16, align: "end" },
+      { header: "End A", width: 18 },
+      { header: "End B", width: 18 },
+      { header: "Holes", width: 11, align: "end" },
+      { header: "kg", width: 12, align: "end" },
+    ],
+    rows: metal.rows.map((row) => [
+      String(row.quantity),
+      row.label,
+      ...(several ? [row.unitIds.map(nameOf).join(", ")] : []),
+      row.profile.shortName,
+      String(row.length),
+      endLabel(row.ends[0]),
+      endLabel(row.ends[1]),
+      String(row.holeCount * row.quantity),
+      row.mass.toFixed(1),
+    ]),
+    landscape: false,
+  });
+
+  sheet.y += 4;
+  writeLines(sheet, booklet.fonts, [
+    ...metal.profileTotals.map(
+      (total) =>
+        `${total.profile.name}: ${total.pieces} pieces, ${total.metres.toFixed(1)} m, ${total.mass.toFixed(1)} kg, ${total.bars} stock bar${total.bars === 1 ? "" : "s"}`,
+    ),
+    `Total ${metal.totalMass.toFixed(1)} kg of section, ${metal.cost.toFixed(2)} in bar stock`,
+  ]);
+
+  /* The bar cutting list. One row per cut, in the order they come off the bar, so it can
+     be worked down without deciding anything. */
+  if (metal.nest.bars.length > 0) {
+    const rows = metal.nest.bars.flatMap((bar) =>
+      bar.cuts.map((cut, index) => [
+        String(bar.index + 1),
+        index === 0 ? bar.profileId : "",
+        cut.label,
+        String(cut.at),
+        String(cut.length),
+        index === bar.cuts.length - 1 ? `${bar.offcut} left` : "",
+      ]),
+    );
+    const bars = table(booklet, {
+      title: "Bar cutting list",
+      subtitle: `${metal.nest.bars.length} stock bar${metal.nest.bars.length === 1 ? "" : "s"} · ${metal.nest.wastePercent.toFixed(1)}% waste · longest piece first, so the offcuts fall at the end of each bar`,
+      columns: [
+        { header: "Bar", width: 12, align: "end" },
+        { header: "Section", width: 34 },
+        { header: "Cut", width: 62 },
+        { header: "At", width: 16, align: "end" },
+        { header: "Length", width: 18, align: "end" },
+        { header: "Offcut", width: 24 },
+      ],
+      rows,
+      landscape: false,
+    });
+    if (metal.nest.oversize.length > 0) {
+      bars.y += 4;
+      writeLines(bars, booklet.fonts, [
+        "Longer than a stock bar, so they have to be joined or bought special:",
+        ...metal.nest.oversize.map((entry) => `${entry.label} — ${entry.length}mm`),
+      ]);
+    }
+  }
+
+  if (metal.welds.length > 0) {
+    const welds = table(booklet, {
+      title: "Weld schedule",
+      subtitle:
+        "Fillet sizes match the wall thickness. Grinding a joint flush costs about as long again as welding it, so only visible corners are ground",
+      columns: [
+        { header: "Joints", width: 16, align: "end" },
+        { header: "Type", width: 20 },
+        { header: "Size", width: 16, align: "end" },
+        { header: "Finish", width: 30 },
+        { header: "Run", width: 18, align: "end" },
+        { header: "For example", width: 82 },
+      ],
+      rows: metal.welds.map((row) => [
+        String(row.count),
+        row.kind,
+        `${row.size}mm`,
+        row.ground ? "ground flush" : "as welded",
+        `${row.metres.toFixed(2)} m`,
+        row.examples.join("; "),
+      ]),
+      landscape: false,
+    });
+    welds.y += 3;
+    drawText(
+      welds,
+      booklet.fonts.bold,
+      `${metal.weldCount} joints, ${metal.weldMetres.toFixed(2)} m of weld`,
+      { x: MARGIN.left, y: welds.y, size: 3.2, color: INK },
+    );
+  }
+
+  /* One elevation per distinct piece, four to a page: the mitre direction is the thing a
+     drawing shows and a table cannot. */
+  const distinct = metal.rows
+    .map((row) => project.members.find((member) => member.id === row.memberIds[0]))
+    .filter((member): member is NonNullable<typeof member> => member !== undefined);
+
+  const perPage = 4;
+  for (let index = 0; index < distinct.length; index += perPage) {
+    const page = addSheet(booklet, true);
+    heading(
+      booklet,
+      page,
+      index === 0 ? "Member elevations" : "Member elevations, continued",
+      "Every dimension is from the left-hand end, which is the end that goes against the saw stop",
+    );
+    const slots = distinct.slice(index, index + perPage);
+    const available = page.height - page.y - MARGIN.bottom;
+    const slotHeight = available / perPage;
+    slots.forEach((member, slot) => {
+      placeDrawing(booklet, page, renderMemberElevation(member), {
+        x: MARGIN.left,
+        y: page.y + slot * slotHeight,
+        width: contentWidth(page),
+        height: slotHeight - 4,
+      });
+    });
+    page.y = page.height - MARGIN.bottom;
+  }
+}
+
 function hardwarePage(booklet: Booklet, cutList: CutList): void {
   const rows = cutList.bom.map((row) => [
     String(row.quantity),
@@ -687,6 +1218,7 @@ function hardwarePage(booklet: Booklet, cutList: CutList): void {
 
 function assemblyPages(
   booklet: Booklet,
+  unit: UnitModel,
   model: WardrobeModel,
   findings: readonly Finding[],
 ): void {
@@ -695,7 +1227,7 @@ function assemblyPages(
   heading(
     booklet,
     sheet,
-    "Assembly sequence",
+    `${unit.name} — assembly`,
     "Derived from the part graph, so it matches the panels in this booklet",
   );
 
@@ -787,12 +1319,13 @@ function assemblyPages(
   }
 }
 
-function panelPages(booklet: Booklet, model: WardrobeModel): void {
-  /* Identical panels share a page: same size, same machining, same drawing. The
-     grouping is partSignature, the same one the cut list collapses rows with, so a
-     page marked ×3 always corresponds to a cut list row of 3. */
-  const seen = new Map<string, { part: (typeof model.parts)[number]; count: number }>();
-  for (const part of model.parts) {
+function panelPages(booklet: Booklet, project: ProjectModel): void {
+  /* Identical panels share a page: same size, same machining, same drawing. The grouping
+     is partSignature, the same one the cut list collapses rows with — and it deliberately
+     ignores which unit a panel is in, so a page marked ×3 always corresponds to a cut list
+     row of 3 even when those three panels go into three different units. */
+  const seen = new Map<string, { part: Part; count: number }>();
+  for (const part of project.parts) {
     const key = partSignature(part);
     const existing = seen.get(key);
     if (existing) existing.count += 1;
@@ -825,9 +1358,9 @@ function panelPages(booklet: Booklet, model: WardrobeModel): void {
   }
 }
 
-function drillingPages(booklet: Booklet, model: WardrobeModel): void {
+function drillingPages(booklet: Booklet, project: ProjectModel): void {
   const rows: string[][] = [];
-  for (const part of model.parts) {
+  for (const part of project.parts) {
     for (const op of part.ops) {
       if (op.kind === "hole") {
         rows.push([part.label, `Face ${op.face}`, String(op.l), String(op.w), `Ø${op.diameter}`, String(op.depth)]);

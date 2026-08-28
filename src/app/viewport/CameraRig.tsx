@@ -84,6 +84,30 @@ export function CameraRig({ bounds }: CameraRigProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [camera, controls, bounds]);
 
+  /* Re-frame when what is being looked at moves somewhere else entirely: isolating a unit
+     in a large room, or selecting a unit at the far end of it. The viewing direction is
+     kept, because the user chose it — only the centre and the distance are refreshed. */
+  const centred = useRef(bounds.sceneCenter);
+  useEffect(() => {
+    const previous = new Vector3(...centred.current);
+    centred.current = bounds.sceneCenter;
+    const target = new Vector3(...bounds.sceneCenter);
+    if (framed.current !== camera.uuid) return;
+    if (target.distanceTo(previous) < Math.max(bounds.radius * 0.3, 0.05)) return;
+
+    const orbit = controls as unknown as Controls | null;
+    const from = orbit?.target ? orbit.target.clone() : previous;
+    const direction = camera.position.clone().sub(from);
+    if (direction.lengthSq() < 1e-6) direction.set(...DIRECTIONS.iso);
+    direction.normalize();
+    goal.current = {
+      position: target.clone().addScaledVector(direction, distanceFor("iso")),
+      target,
+      zoom: zoomFor(),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bounds, camera, controls]);
+
   useEffect(() => {
     if (!request) return;
     const direction = new Vector3(...DIRECTIONS[request.view]).normalize();

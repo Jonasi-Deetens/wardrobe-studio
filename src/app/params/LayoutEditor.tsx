@@ -18,8 +18,8 @@ import {
   type SplitNode,
 } from "@/engine/spec/types";
 import { cn } from "@/lib/cn";
-import { useDerived } from "../store/derived";
-import { useStudio } from "../store/useStudio";
+import { useDerived, useModel } from "../store/derived";
+import { placementOf, useStudio } from "../store/useStudio";
 import { Button, Field, NumberInput, Select, Switch, Tooltip } from "../ui";
 
 /**
@@ -31,7 +31,13 @@ import { Button, Field, NumberInput, Select, Switch, Tooltip } from "../ui";
  * and the indentation makes the nesting legible.
  */
 export function LayoutEditor() {
-  const layout = useStudio((state) => state.spec.layout);
+  /* The tree belongs to the unit being edited. A unit of another kind has no layout, and
+     the group holding this editor is hidden for those, so there is nothing to draw. */
+  const layout = useStudio((state) => {
+    const placed = placementOf(state.project, state.selectedUnitId);
+    return placed.unit.kind === "wardrobe" ? placed.unit.layout : null;
+  });
+  if (!layout) return null;
   return (
     <div className="px-2 pt-1 pb-2">
       <NodeEditor node={layout} depth={0} parentAxis={null} size={null} isRoot />
@@ -128,10 +134,15 @@ function BayEditor({ bay, depth, parentAxis, size }: BayEditorProps) {
   const setFitting = useStudio((state) => state.setFitting);
   const replaceLayoutNode = useStudio((state) => state.replaceLayoutNode);
   const removeLayoutNode = useStudio((state) => state.removeLayoutNode);
-  const { model, findings } = useDerived();
+  const { findings } = useDerived();
+  const model = useModel();
 
   const resolved = model.bays.find((entry) => entry.id === bay.id);
-  const bayFindings = findings.filter((finding) => finding.bayId === bay.id);
+  /* Layout node ids are unique across the project, but the unit check keeps it that way
+     even for a file whose ids were repaired on load. */
+  const bayFindings = findings.filter(
+    (finding) => finding.bayId === bay.id && (!finding.unitId || finding.unitId === model.unitId),
+  );
   const open = selectedBayId === bay.id;
 
   /* Wrapping a bay in a split is how you subdivide it: the bay becomes the first child

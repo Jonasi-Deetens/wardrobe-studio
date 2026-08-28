@@ -1,5 +1,5 @@
-import { getSheetSize } from "../catalog/materials";
-import type { GrainDirection, Part } from "../core/part";
+import { getSheetSize, MATERIAL_BY_ID } from "../catalog/materials";
+import { cutSize, type GrainDirection, type Part } from "../core/part";
 import { mm2 } from "../core/units";
 
 /**
@@ -29,11 +29,14 @@ export type NestPart = {
   readonly width: number;
   readonly grain: GrainDirection;
   readonly materialId: string;
+  readonly unitId?: string;
 };
 
 export type Placement = {
   readonly partId: string;
   readonly label: string;
+  /** Which unit the part belongs to, so the diagram can show one unit's panels. */
+  readonly unitId?: string;
   /** Position of the part's lower-left corner on the sheet. */
   readonly x: number;
   readonly y: number;
@@ -100,18 +103,15 @@ export function nestablePartsOf(parts: readonly Part[]): NestPart[] {
   return parts.map((part) => ({
     id: part.id,
     label: part.label,
-    length: part.length,
-    width: part.width,
+    /* A folded part is nested as its flat blank: that is the shape the sheet has to hold. */
+    ...cutSize(part),
     grain: part.grain,
     materialId: part.materialId,
+    ...(part.unitId !== undefined ? { unitId: part.unitId } : {}),
   }));
 }
 
 export function nest(parts: readonly NestPart[], options: NestOptions): NestResult {
-  const sheet = getSheetSize(options.sheetSizeId);
-  const usableLength = mm2(sheet.length - 2 * options.trim);
-  const usableWidth = mm2(sheet.width - 2 * options.trim);
-
   const byMaterial = new Map<string, NestPart[]>();
   for (const part of parts) {
     const bucket = byMaterial.get(part.materialId);
@@ -127,10 +127,13 @@ export function nest(parts: readonly NestPart[], options: NestOptions): NestResu
     a[0].localeCompare(b[0]),
   )) {
     const before = sheets.length;
+    /* Stainless sheet and cladding boards do not come as 2800 x 2070 panels, so a material
+       that names its own stock is nested on that instead of on the project's board. */
+    const sheet = getSheetSize(MATERIAL_BY_ID.get(materialId)?.sheetSizeId ?? options.sheetSizeId);
     const result = nestOneMaterial(group, {
       materialId,
-      usableLength,
-      usableWidth,
+      usableLength: mm2(sheet.length - 2 * options.trim),
+      usableWidth: mm2(sheet.width - 2 * options.trim),
       sheetLength: sheet.length,
       sheetWidth: sheet.width,
       trim: options.trim,
@@ -144,7 +147,7 @@ export function nest(parts: readonly NestPart[], options: NestOptions): NestResu
   }
 
   const cuts = sheets.flatMap((s) => cutSequence(s, options.kerf));
-  const totalUsable = sheets.length * usableLength * usableWidth;
+  const totalUsable = sheets.reduce((sum, s) => sum + s.usableLength * s.usableWidth, 0);
   const totalUsed = sheets.reduce((sum, s) => sum + s.usedArea, 0);
 
   return {
@@ -288,6 +291,7 @@ class MaxRectsPacker {
     const placement: Placement = {
       partId: part.id,
       label: part.label,
+      ...(part.unitId !== undefined ? { unitId: part.unitId } : {}),
       x: mm2(best.rect.x),
       y: mm2(best.rect.y),
       width: mm2(best.w),

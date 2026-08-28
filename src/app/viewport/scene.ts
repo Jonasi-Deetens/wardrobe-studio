@@ -1,8 +1,12 @@
 import { Matrix4, Vector3 } from "three";
 import { getMaterial } from "@/engine/catalog/materials";
-import { boxCenter, type Vec3 } from "@/engine/core/geometry";
+import { getProfile } from "@/engine/catalog/profiles";
+import { boxCenter, type Box3, type Vec3 } from "@/engine/core/geometry";
+import { memberBounds, type Member } from "@/engine/core/member";
 import { partCenter, type Part, type PartRole } from "@/engine/core/part";
+import type { UnitModel } from "@/engine/project";
 import type { WardrobeModel } from "@/engine/solver";
+import type { ResolvedRail } from "@/engine/solver/fittings";
 
 /**
  * Turning parts into scene transforms.
@@ -177,19 +181,65 @@ export type TransformOptions = {
 };
 
 /**
+ * Everything the viewport needs to draw one unit, whatever kind it is.
+ *
+ * The panel renderer and the hardware renderer were both written against `WardrobeModel`,
+ * back when a document was one wardrobe. Rather than teach each of them about every unit
+ * kind, each kind is reduced to this once — so a work table's folded top and a counter's
+ * drawer fronts are drawn by exactly the same code that draws a wardrobe's, and adding a
+ * kind means answering these five questions rather than editing three components.
+ */
+export type PartScene = {
+  readonly parts: readonly Part[];
+  readonly swings: readonly DoorSwing[];
+  readonly rails: readonly ResolvedRail[];
+  /** Handle catalogue ids, for drawing the handles a front's holes are drilled for. */
+  readonly doorHandleId: string | null;
+  readonly drawerHandleId: string | null;
+};
+
+export function partSceneOf(unit: UnitModel): PartScene {
+  /* `unit.parts` rather than the kind's model, because cladding is added to the unit after
+     its own solver has run and it has to be drawn too. */
+  const parts = unit.parts;
+  switch (unit.detail.kind) {
+    case "wardrobe": {
+      const model = unit.detail.model;
+      return {
+        parts,
+        swings: doorSwings(model),
+        rails: model.rails,
+        doorHandleId: model.spec.handles.doorHandleId,
+        drawerHandleId: model.spec.handles.drawerHandleId,
+      };
+    }
+    case "work-table":
+      return { parts, swings: [], rails: [], doorHandleId: null, drawerHandleId: null };
+    case "counter":
+      return {
+        parts,
+        swings: [],
+        rails: [],
+        doorHandleId: null,
+        drawerHandleId: unit.detail.model.spec.drawerBank.handleId,
+      };
+  }
+}
+
+/**
  * Every part's transform for one frame of the view state. Panels and the hardware
  * mounted on them are drawn from this one map, so a handle cannot drift away from the
  * door it is screwed to.
  */
 export function partTransforms(
-  model: WardrobeModel,
+  scene: PartScene,
   { explode, doorsOpen, bounds }: TransformOptions,
 ): Map<string, PartTransform> {
   const swings = new Map<string, DoorSwing>();
-  for (const swing of doorSwings(model)) swings.set(swing.partId, swing);
+  for (const swing of scene.swings) swings.set(swing.partId, swing);
 
   const result = new Map<string, PartTransform>();
-  for (const part of model.parts) {
+  for (const part of scene.parts) {
     const offset = new Matrix4();
     if (explode > 0) {
       const travel = explodeOffset(part, bounds, explode);
@@ -203,6 +253,74 @@ export function partTransforms(
       matrix: partMatrix(part, new Matrix4()).premultiply(offset),
       offset,
     });
+  }
+  return result;
+}
+
+/* ----------------------------------------------------------- metal members - */
+
+/**
+ * A member's transform.
+ *
+ * Unlike a panel, a length of tube is not a box: a 40x40 hollow section is a hole with a
+ * wall round it, and a 38mm leg is round. So the section is built into the geometry at its
+ * real size, once per profile, and only the length is scaled here — which is also why the
+ * basis is ordered (width, thickness, length) rather than the panels' (length, width,
+ * thickness).
+ */
+export function memberMatrix(
+  member: Member,
+  section: { readonly width: number; readonly height: number },
+  target = new Matrix4(),
+): Matrix4 {
+  const { origin, lAxis, wAxis, tAxis } = member.placement;
+  const l = V_A.set(lAxis[0], lAxis[1], lAxis[2]);
+  const w = V_B.set(wAxis[0], wAxis[1], wAxis[2]);
+  const t = V_C.set(tAxis[0], tAxis[1], tAxis[2]);
+
+  const center = V_D
+    .set(origin[0], origin[1], origin[2])
+    .addScaledVector(l, member.length / 2)
+    .addScaledVector(w, section.width / 2)
+    .addScaledVector(t, section.height / 2);
+
+  /* A left-handed basis would light the tube inside out. Hollow and round sections are
+     symmetric across their width, so flipping that axis costs nothing. */
+  const handedness = w.dot(new Vector3().copy(t).cross(l));
+  const sw = handedness < 0 ? -1 : 1;
+
+  target.set(
+    w.x * sw, t.x, l.x * member.length, center.x,
+    w.y * sw, t.y, l.y * member.length, center.y,
+    w.z * sw, t.z, l.z * member.length, center.z,
+    0, 0, 0, 1,
+  );
+  return target;
+}
+
+/**
+ * Members in an exploded view come apart the same way panels do — radially from the middle
+ * of the unit — so a frame and the top bolted to it separate together rather than one
+ * drifting through the other.
+ */
+export function memberTransforms(
+  members: readonly Member[],
+  { explode, bounds }: { readonly explode: number; readonly bounds: SceneBounds },
+): Map<string, Matrix4> {
+  const result = new Map<string, Matrix4>();
+  for (const member of members) {
+    const profile = getProfile(member.profileId);
+    const matrix = memberMatrix(member, profile, new Matrix4());
+    if (explode > 0) {
+      const centre = boxCenter(memberBounds(member, profile));
+      const travel = new Vector3(
+        centre[0] - bounds.center[0],
+        centre[1] - bounds.center[1],
+        centre[2] - bounds.center[2],
+      ).multiplyScalar(EXPLODE_SPREAD * explode);
+      matrix.premultiply(new Matrix4().makeTranslation(travel.x, travel.y, travel.z));
+    }
+    result.set(member.id, matrix);
   }
   return result;
 }
@@ -222,18 +340,22 @@ export type SceneBounds = {
   readonly floorY: number;
 };
 
-export function sceneBounds(model: WardrobeModel): SceneBounds {
-  const center = boxCenter(model.bounds);
+/**
+ * Bounds of anything the camera has to frame: one unit in its own space, or a whole room.
+ * It takes a box rather than a model because those two callers do not share a type.
+ */
+export function sceneBounds(box: Box3): SceneBounds {
+  const center = boxCenter(box);
   const size: Vec3 = [
-    model.bounds.max[0] - model.bounds.min[0],
-    model.bounds.max[1] - model.bounds.min[1],
-    model.bounds.max[2] - model.bounds.min[2],
+    box.max[0] - box.min[0],
+    box.max[1] - box.min[1],
+    box.max[2] - box.min[2],
   ];
   return {
     center,
     size,
     sceneCenter: [center[0] * SCENE_SCALE, center[1] * SCENE_SCALE, center[2] * SCENE_SCALE],
     radius: Math.hypot(size[0], size[1], size[2]) * 0.5 * SCENE_SCALE,
-    floorY: model.bounds.min[1] * SCENE_SCALE,
+    floorY: box.min[1] * SCENE_SCALE,
   };
 }

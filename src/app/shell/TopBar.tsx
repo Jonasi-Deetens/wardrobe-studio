@@ -14,7 +14,8 @@ import {
   Undo2,
   X,
 } from "lucide-react";
-import { PRESETS } from "@/engine/spec/presets";
+import { PROJECT_PRESETS, UNIT_TEMPLATES } from "@/engine/spec/presets";
+import { UNIT_KIND_LABELS, type UnitKind } from "@/engine/spec/types";
 import { cn } from "@/lib/cn";
 import { canShareLink } from "../lib/platform";
 import { confirmDiscard, openProjectFile, saveProject, saveProjectAs } from "../lib/project";
@@ -31,6 +32,9 @@ import { Button, Tooltip } from "../ui";
  * reach it, and this row keeps only what has to be at the top: the project, the two
  * drawer buttons, undo and a menu.
  */
+/** Grouping order for the "add a unit" list: the joinery first, then the metalwork. */
+const UNIT_KINDS: readonly UnitKind[] = ["wardrobe", "work-table", "counter"];
+
 export function TopBar({
   onCopyLink,
   onOpenParameters,
@@ -43,12 +47,13 @@ export function TopBar({
 }) {
   const mode = useStudio((state) => state.mode);
   const setMode = useStudio((state) => state.setMode);
-  const name = useStudio((state) => state.spec.meta.name);
+  const name = useStudio((state) => state.project.meta.name);
   const setValue = useStudio((state) => state.setValue);
   const loadPreset = useStudio((state) => state.loadPreset);
+  const addUnit = useStudio((state) => state.addUnit);
   const savedAt = useStudio((state) => state.savedAt);
   const filePath = useStudio((state) => state.filePath);
-  const dirty = useStudio((state) => state.spec !== state.cleanSpec);
+  const dirty = useStudio((state) => state.project !== state.cleanProject);
   const { summary, elapsedMs } = useDerived();
 
   const canUndo = useTemporal((state) => state.pastStates.length > 0);
@@ -105,9 +110,9 @@ export function TopBar({
           className="z-50 w-[min(20rem,calc(100vw-1rem))] rounded-lg border border-line bg-raised p-1 shadow-2xl shadow-black/50"
         >
           <DropdownMenu.Label className="px-2 py-1.5 text-[10.5px] tracking-wide text-faint uppercase">
-            Start from a known arrangement
+            Start a new room
           </DropdownMenu.Label>
-          {PRESETS.map((preset) => (
+          {PROJECT_PRESETS.map((preset) => (
             <DropdownMenu.Item
               key={preset.id}
               onSelect={() => loadPreset(preset.build(), preset.name)}
@@ -117,6 +122,31 @@ export function TopBar({
               <p className="mt-0.5 text-[11px] leading-snug text-faint">{preset.description}</p>
             </DropdownMenu.Item>
           ))}
+          <DropdownMenu.Separator className="my-1 h-px bg-line" />
+          {/* A unit template does not replace the room — it stands another unit in it. */}
+          {UNIT_KINDS.map((kind) => {
+            const templates = UNIT_TEMPLATES.filter((template) => template.kind === kind);
+            if (templates.length === 0) return null;
+            return (
+              <div key={kind}>
+                <DropdownMenu.Label className="px-2 py-1.5 text-[10.5px] tracking-wide text-faint uppercase">
+                  Add a {UNIT_KIND_LABELS[kind].toLowerCase()}
+                </DropdownMenu.Label>
+                {templates.map((template) => (
+                  <DropdownMenu.Item
+                    key={template.id}
+                    onSelect={() => addUnit(template.build(), template.name)}
+                    className="cursor-pointer rounded px-2 py-2 outline-none data-[highlighted]:bg-hover"
+                  >
+                    <p className="text-[12.5px] text-ink">{template.name}</p>
+                    <p className="mt-0.5 text-[11px] leading-snug text-faint">
+                      {template.description}
+                    </p>
+                  </DropdownMenu.Item>
+                ))}
+              </div>
+            );
+          })}
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
@@ -302,15 +332,30 @@ export function TopBar({
                 )}
                 <DropdownMenu.Separator className="my-1 h-px bg-line" />
                 <DropdownMenu.Label className="px-2 py-1.5 text-[10.5px] tracking-wide text-faint uppercase">
-                  Presets
+                  Rooms
                 </DropdownMenu.Label>
-                {PRESETS.map((preset) => (
+                {PROJECT_PRESETS.map((preset) => (
                   <DropdownMenu.Item
                     key={preset.id}
                     onSelect={() => loadPreset(preset.build(), preset.name)}
                     className="cursor-pointer rounded px-2 py-2 text-[12.5px] text-ink outline-none data-[highlighted]:bg-hover"
                   >
                     {preset.name}
+                  </DropdownMenu.Item>
+                ))}
+                <DropdownMenu.Label className="px-2 py-1.5 text-[10.5px] tracking-wide text-faint uppercase">
+                  Add a unit
+                </DropdownMenu.Label>
+                {UNIT_TEMPLATES.map((template) => (
+                  <DropdownMenu.Item
+                    key={template.id}
+                    onSelect={() => addUnit(template.build(), template.name)}
+                    className="cursor-pointer rounded px-2 py-2 text-[12.5px] text-ink outline-none data-[highlighted]:bg-hover"
+                  >
+                    {template.name}
+                    <span className="ml-1.5 text-[11px] text-faint">
+                      {UNIT_KIND_LABELS[template.kind]}
+                    </span>
                   </DropdownMenu.Item>
                 ))}
               </DropdownMenu.Content>

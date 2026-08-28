@@ -2,11 +2,22 @@ import * as Collapsible from "@radix-ui/react-collapsible";
 import { ChevronRight, Search, X } from "lucide-react";
 import { useMemo } from "react";
 import { cn } from "@/lib/cn";
-import { useStudio } from "../store/useStudio";
+import { placementOf, useEditingSpec, useStudio } from "../store/useStudio";
 import { Button } from "../ui";
 import { LayoutEditor } from "./LayoutEditor";
-import { matchesSearch, PARAM_GROUPS, type Param, type ParamGroup } from "./descriptors";
+import {
+  groupApplies,
+  matchesSearch,
+  PARAM_GROUPS,
+  paramApplies,
+  scopeOf,
+  type Param,
+  type ParamGroup,
+} from "./descriptors";
+import { OpeningsEditor } from "./OpeningsEditor";
 import { ParamControl } from "./ParamControl";
+import { PlacementEditor } from "./PlacementEditor";
+import { UnitSwitcher } from "./UnitSwitcher";
 
 /**
  * The left pane: every parameter, grouped and collapsible, with a search box.
@@ -16,7 +27,8 @@ import { ParamControl } from "./ParamControl";
  * one field with nothing else around it.
  */
 export function ParameterPanel() {
-  const spec = useStudio((state) => state.spec);
+  const spec = useEditingSpec();
+  const kind = useStudio((state) => placementOf(state.project, state.selectedUnitId).unit.kind);
   const search = useStudio((state) => state.search);
   const setSearch = useStudio((state) => state.setSearch);
   const openGroups = useStudio((state) => state.openGroups);
@@ -25,17 +37,23 @@ export function ParameterPanel() {
 
   const searching = search.trim().length > 0;
 
+  /* Groups are filtered by what the selected unit actually is: a work table has no hinges
+     and no back panel, so those groups are not shown for it rather than shown empty. */
   const visible = useMemo(() => {
     const groups: { group: ParamGroup; params: Param[] }[] = [];
     for (const group of PARAM_GROUPS) {
+      if (!groupApplies(group, kind)) continue;
       const params = group.params.filter(
-        (param) => (param.when ? param.when(spec) : true) && matchesSearch(param, group, search),
+        (param) =>
+          paramApplies(group, param, kind) &&
+          (param.when ? param.when(spec) : true) &&
+          matchesSearch(param, group, search),
       );
       const keepCustom = group.custom !== undefined && !searching;
       if (params.length > 0 || keepCustom) groups.push({ group, params });
     }
     return groups;
-  }, [spec, search, searching]);
+  }, [spec, kind, search, searching]);
 
   const matchCount = visible.reduce((sum, entry) => sum + entry.params.length, 0);
 
@@ -82,7 +100,9 @@ export function ParameterPanel() {
         <p className="border-b border-line px-3 py-1.5 text-[11px] text-faint">
           {matchCount} {matchCount === 1 ? "parameter" : "parameters"} match “{search.trim()}”
         </p>
-      ) : null}
+      ) : (
+        <UnitSwitcher />
+      )}
 
       <div className="ws-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain">
         {visible.length === 0 ? (
@@ -114,6 +134,13 @@ export function ParameterPanel() {
                 <span className="text-[12px] font-medium tracking-wide text-ink uppercase">
                   {group.label}
                 </span>
+                {/* Whose setting this is. Changing the kerf changes every unit in the
+                    room, and that is worth saying before it is changed. */}
+                {scopeOf(group) === "project" ? (
+                  <span className="shrink-0 rounded bg-raised px-1 py-px text-[9.5px] tracking-wide text-faint uppercase">
+                    Room
+                  </span>
+                ) : null}
                 <span className="ml-auto shrink-0 text-[10.5px] text-faint">
                   {group.custom ? "" : params.length}
                 </span>
@@ -125,11 +152,13 @@ export function ParameterPanel() {
                   </p>
                 ) : null}
                 {group.custom === "layout" ? <LayoutEditor /> : null}
+                {group.custom === "placement" ? <PlacementEditor /> : null}
                 <div className="divide-y divide-line/40 pb-1">
                   {params.map((param) => (
                     <ParamControl key={param.path.join(".")} param={param} />
                   ))}
                 </div>
+                {group.custom === "openings" && !searching ? <OpeningsEditor /> : null}
               </Collapsible.Content>
             </Collapsible.Root>
           );

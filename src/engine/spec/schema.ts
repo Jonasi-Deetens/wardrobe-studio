@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { LayoutChild, LayoutNode, WardrobeSpec } from "./types";
+import type { LayoutChild, LayoutNode, ProjectSpec, WardrobeSpec } from "./types";
 
 /**
  * Runtime validation for a saved or shared spec.
@@ -173,6 +173,18 @@ const joinerySchema = z.object({
   shelfPinInset: positive(300),
 });
 
+const claddingSchema = z.object({
+  style: z.enum(["none", "slats", "board", "tongue-groove"]),
+  materialId: z.string(),
+  faces: z.array(z.enum(["front", "left", "right", "back"])),
+  pieceWidth: positive(1200).min(20),
+  gap: positive(200),
+  direction: z.enum(["horizontal", "vertical"]),
+  standoff: positive(100),
+  fixing: z.enum(["secret", "face-screwed", "glued"]),
+  riseAboveTop: positive(600),
+});
+
 const productionSchema = z.object({
   sheetSizeId: z.string(),
   kerf: positive(10),
@@ -184,31 +196,181 @@ const productionSchema = z.object({
     shelfFront: z.string(),
     shelfOther: z.string(),
   }),
+  stockBarLength: positive(12000).min(500),
+  barKerf: positive(10),
   labourRate: positive(500),
   minutesPerPanel: positive(180),
+  minutesPerMember: positive(180),
+  minutesPerWeld: positive(180),
 });
 
-export const wardrobeSpecSchema = z.object({
-  version: z.number().int().min(1),
-  meta: z.object({
-    name: z.string().max(120),
-    notes: z.string().max(4000),
-  }),
+/**
+ * The wardrobe's own sections. A stored unit is this plus its kind; the resolved spec
+ * the solver takes is this plus the project-level sections.
+ */
+const wardrobeBodySchema = z.object({
   carcase: carcaseSchema,
   layout: layoutNodeSchema,
   doors: doorsSchema,
   handles: handlesSchema,
   drawers: drawersSchema,
   joinery: joinerySchema,
-  production: productionSchema,
-}) as z.ZodType<WardrobeSpec>;
+  cladding: claddingSchema,
+});
 
-export type SpecParseResult =
-  | { readonly ok: true; readonly spec: WardrobeSpec }
+const projectHeaderSchema = {
+  version: z.number().int().min(1),
+  meta: z.object({
+    name: z.string().max(120),
+    notes: z.string().max(4000),
+  }),
+  production: productionSchema,
+};
+
+export const wardrobeSpecSchema = wardrobeBodySchema.extend(
+  projectHeaderSchema,
+) as unknown as z.ZodType<WardrobeSpec>;
+
+export const wardrobeUnitSchema = wardrobeBodySchema.extend({
+  kind: z.literal("wardrobe"),
+});
+
+export const workTableUnitSchema = z.object({
+  kind: z.literal("work-table"),
+  width: positive(4000).min(300),
+  depth: positive(1200).min(300),
+  height: positive(1400).min(400),
+  top: z.object({
+    materialId: z.string(),
+    edge: z.enum(["folded-down", "boxed", "square"]),
+    edgeReturn: positive(120),
+    upstand: positive(600),
+    upstandReturn: positive(120),
+  }),
+  legs: z.object({
+    profileId: z.string(),
+    inset: positive(400),
+    feet: z.enum(["bullet", "castor", "none"]),
+    braced: z.boolean(),
+  }),
+  shelves: z.object({
+    count: z.number().int().min(0).max(2),
+    materialId: z.string(),
+    lowest: positive(1200),
+    spacing: positive(900),
+    edgeReturn: positive(120),
+  }),
+  groundWelds: z.boolean(),
+  cladding: claddingSchema,
+});
+
+export const counterUnitSchema = z.object({
+  kind: z.literal("counter"),
+  width: positive(6000).min(400),
+  depth: positive(1500).min(300),
+  height: positive(1500).min(500),
+  frame: z.object({
+    profileId: z.string(),
+    inset: positive(600),
+    feet: z.enum(["bullet", "castor", "none"]),
+    braced: z.boolean(),
+    bottomRail: positive(900),
+  }),
+  top: z.object({
+    kind: z.enum(["panel", "inox"]),
+    materialId: z.string(),
+    bandingId: z.string(),
+    frontOverhang: positive(600),
+    endOverhang: positive(400),
+    backOverhang: positive(400),
+  }),
+  bar: z.object({
+    height: positive(1800),
+    depth: positive(900),
+    materialId: z.string(),
+  }),
+  drawerBank: z.object({
+    enabled: z.boolean(),
+    fromLeft: positive(6000),
+    width: positive(1500),
+    count: z.number().int().min(1).max(8),
+    carcaseMaterialId: z.string(),
+    frontMaterialId: z.string(),
+    handleId: z.string(),
+    slideId: z.string(),
+  }),
+  shelves: z.object({
+    count: z.number().int().min(0).max(4),
+    materialId: z.string(),
+    lowest: positive(1400),
+    spacing: positive(900),
+    setback: positive(600),
+  }),
+  groundWelds: z.boolean(),
+  cladding: claddingSchema,
+});
+
+/**
+ * A discriminated union, so that adding a unit kind is an additive change: an older file
+ * never contains a kind this build does not know, and a newer one fails loudly on the
+ * discriminator rather than quietly validating as the wrong thing.
+ */
+export const unitSpecSchema = z.discriminatedUnion("kind", [
+  wardrobeUnitSchema,
+  workTableUnitSchema,
+  counterUnitSchema,
+]);
+
+const openingSchema = z.object({
+  id: z.string().min(1),
+  wall: z.enum(["back", "front", "left", "right"]),
+  x: z.number().finite().min(-20000).max(20000),
+  sill: positive(10000),
+  width: positive(20000).min(10),
+  height: positive(10000).min(10),
+});
+
+const roomSchema = z.object({
+  width: positive(30000).min(500),
+  depth: positive(30000).min(500),
+  height: positive(10000).min(500),
+  wallThickness: positive(1000),
+  roof: z.object({
+    kind: z.enum(["flat", "shed", "gable"]),
+    pitch: z.number().min(0).max(60),
+    slopeAxis: z.enum(["x", "z"]),
+    flip: z.boolean(),
+    overhang: positive(2000),
+    thickness: positive(600),
+  }),
+  openings: z.array(openingSchema).max(40),
+});
+
+const unitPlacementSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().max(120),
+  at: z.object({
+    x: z.number().finite().min(-30000).max(30000),
+    z: z.number().finite().min(-30000).max(30000),
+    yaw: z.number().finite().min(-360).max(360),
+  }),
+  unit: unitSpecSchema,
+});
+
+export const projectSpecSchema = z.object({
+  ...projectHeaderSchema,
+  room: roomSchema,
+  units: z.array(unitPlacementSchema).min(1).max(60),
+}) as unknown as z.ZodType<ProjectSpec>;
+
+export type ParseResult<T> =
+  | { readonly ok: true; readonly spec: T }
   | { readonly ok: false; readonly issues: readonly string[] };
 
-export function validateSpec(value: unknown): SpecParseResult {
-  const result = wardrobeSpecSchema.safeParse(value);
+export type SpecParseResult = ParseResult<WardrobeSpec>;
+
+function parse<T>(schema: z.ZodType<T>, value: unknown): ParseResult<T> {
+  const result = schema.safeParse(value);
   if (result.success) return { ok: true, spec: result.data };
   return {
     ok: false,
@@ -216,4 +378,14 @@ export function validateSpec(value: unknown): SpecParseResult {
       (issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`,
     ),
   };
+}
+
+/** Validates one resolved wardrobe. Used by the solver's tests and by the unit editor. */
+export function validateSpec(value: unknown): SpecParseResult {
+  return parse(wardrobeSpecSchema, value);
+}
+
+/** Validates a whole project document, which is what gets saved and shared. */
+export function validateProject(value: unknown): ParseResult<ProjectSpec> {
+  return parse(projectSpecSchema, value);
 }

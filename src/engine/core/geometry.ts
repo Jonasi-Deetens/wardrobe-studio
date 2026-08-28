@@ -68,6 +68,45 @@ export type Placement = {
   readonly tAxis: Vec3;
 };
 
+/**
+ * Turns a vector about the Y axis. Positive degrees turn anticlockwise seen from
+ * above, with the front of the room at the bottom of the plan.
+ */
+export function rotateY(v: Vec3, degrees: number): Vec3 {
+  if (degrees === 0) return v;
+  const a = (degrees * Math.PI) / 180;
+  const cos = Math.cos(a);
+  const sin = Math.sin(a);
+  return [v[0] * cos + v[2] * sin, v[1], -v[0] * sin + v[2] * cos];
+}
+
+/**
+ * Where a unit's placement puts it in the room: turned about its own origin, then
+ * moved. This is the only place the room transform is applied, so a part, its
+ * machining and its hardware cannot end up in different places.
+ */
+export type UnitTransform = {
+  readonly x: number;
+  readonly z: number;
+  readonly yaw: number;
+};
+
+export const IDENTITY_TRANSFORM: UnitTransform = { x: 0, z: 0, yaw: 0 };
+
+export function transformPoint(point: Vec3, at: UnitTransform): Vec3 {
+  const turned = rotateY(point, at.yaw);
+  return [turned[0] + at.x, turned[1], turned[2] + at.z];
+}
+
+export function transformPlacement(placement: Placement, at: UnitTransform): Placement {
+  return {
+    origin: transformPoint(placement.origin, at),
+    lAxis: rotateY(placement.lAxis, at.yaw),
+    wAxis: rotateY(placement.wAxis, at.yaw),
+    tAxis: rotateY(placement.tAxis, at.yaw),
+  };
+}
+
 /** Maps a panel-local point to assembly space. */
 export function toWorld(
   placement: Placement,

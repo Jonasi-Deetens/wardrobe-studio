@@ -22,12 +22,12 @@ export const PROJECT_EXTENSION = "wardrobe";
 
 /** What the window and the top bar call the current project. */
 export function projectFileName(): string {
-  const { filePath, spec } = useStudio.getState();
+  const { filePath, project } = useStudio.getState();
   if (filePath) {
     const parts = filePath.split(/[\\/]/);
     return parts[parts.length - 1] || filePath;
   }
-  return `${suggestedStem(spec.meta.name)}.${PROJECT_EXTENSION}`;
+  return `${suggestedStem(project.meta.name)}.${PROJECT_EXTENSION}`;
 }
 
 function suggestedStem(name: string): string {
@@ -45,7 +45,7 @@ export async function saveProject(): Promise<boolean> {
   const { filePath, markFile, addNotices } = useStudio.getState();
   if (!filePath) return saveProjectAs();
 
-  const outcome = await writeProjectAt(filePath, serialiseSpec(useStudio.getState().spec));
+  const outcome = await writeProjectAt(filePath, serialiseSpec(useStudio.getState().project));
   if (outcome.kind === "failed") {
     addNotices([`Could not save to ${filePath}: ${outcome.reason}`]);
     return false;
@@ -55,11 +55,11 @@ export async function saveProject(): Promise<boolean> {
 }
 
 export async function saveProjectAs(): Promise<boolean> {
-  const { markFile, addNotices, spec } = useStudio.getState();
+  const { markFile, addNotices, project } = useStudio.getState();
   const outcome = await saveFile({
-    suggestedName: `${suggestedStem(spec.meta.name)}.${PROJECT_EXTENSION}`,
+    suggestedName: `${suggestedStem(project.meta.name)}.${PROJECT_EXTENSION}`,
     kind: "project",
-    contents: serialiseSpec(spec),
+    contents: serialiseSpec(project),
   });
 
   if (outcome.kind === "cancelled") return false;
@@ -119,8 +119,8 @@ function apply(text: string, path: string | null): boolean {
  * lost by opening something else, and a `confirm()` on top of a file picker is noise.
  */
 export async function confirmDiscard(action: string): Promise<boolean> {
-  const { spec, cleanSpec } = useStudio.getState();
-  if (spec === cleanSpec) return true;
+  const { project, cleanProject } = useStudio.getState();
+  if (project === cleanProject) return true;
   if (!isDesktop()) return true;
 
   try {

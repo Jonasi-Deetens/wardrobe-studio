@@ -9,7 +9,6 @@ import {
   type Matrix4,
 } from "three";
 import type { Part } from "@/engine/core/part";
-import type { WardrobeModel } from "@/engine/solver";
 import { useStudio } from "../store/useStudio";
 import { visualFor, type PartTransform } from "./scene";
 
@@ -74,11 +73,11 @@ function outlineMaterial(color: string, transparent: boolean, opacity: number): 
 }
 
 type PartsProps = {
-  readonly model: WardrobeModel;
+  readonly parts: readonly Part[];
   readonly transforms: ReadonlyMap<string, PartTransform>;
 };
 
-export const Parts = memo(function Parts({ model, transforms }: PartsProps) {
+export const Parts = memo(function Parts({ parts, transforms }: PartsProps) {
   const showDoors = useStudio((state) => state.view.showDoors);
   const showBack = useStudio((state) => state.view.showBack);
   const isolateRole = useStudio((state) => state.view.isolateRole);
@@ -86,12 +85,12 @@ export const Parts = memo(function Parts({ model, transforms }: PartsProps) {
 
   const visible = useMemo(
     () =>
-      model.parts.filter((part) => {
+      parts.filter((part) => {
         if (!showDoors && (part.role === "door" || part.role === "drawer-front")) return false;
         if (!showBack && part.role === "back") return false;
         return true;
       }),
-    [model.parts, showDoors, showBack],
+    [parts, showDoors, showBack],
   );
 
   return (

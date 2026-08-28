@@ -36,7 +36,7 @@ import { Viewport } from "./viewport/Viewport";
  */
 export function App() {
   const mode = useStudio((state) => state.mode);
-  const spec = useStudio((state) => state.spec);
+  const spec = useStudio((state) => state.project);
   const notices = useStudio((state) => state.notices);
   const dismissNotices = useStudio((state) => state.dismissNotices);
 

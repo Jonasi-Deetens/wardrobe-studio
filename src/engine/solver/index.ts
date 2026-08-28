@@ -31,6 +31,11 @@ import { buildLayout, type ResolvedBay, type ResolvedDivider } from "./layout";
  */
 export type WardrobeModel = {
   readonly spec: WardrobeSpec;
+  /**
+   * Which unit in the room this is, once the project layer has placed it. Absent when a
+   * wardrobe is solved on its own, which is what the engine tests and the fallback model do.
+   */
+  readonly unitId?: string;
   readonly frame: Frame;
   readonly parts: readonly Part[];
   readonly partsById: ReadonlyMap<string, Part>;

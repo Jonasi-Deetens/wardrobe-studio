@@ -4,7 +4,7 @@ import { createDefaultSpec } from "../spec/defaults";
 import { PRESET_BY_ID } from "../spec/presets";
 import type { WardrobeSpec } from "../spec/types";
 import { solve } from "../solver";
-import { buildCutList } from ".";
+import { cutListOfModel } from ".";
 import { nest, nestablePartsOf, type NestPart } from "./nesting";
 
 const OPTIONS = {
@@ -156,7 +156,7 @@ describe("nesting", () => {
 
 describe("cut list", () => {
   const model = solve(createDefaultSpec());
-  const cutList = buildCutList(model);
+  const cutList = cutListOfModel(model);
 
   it("accounts for every part exactly once", () => {
     const total = cutList.rows.reduce((sum, row) => sum + row.quantity, 0);
@@ -170,7 +170,7 @@ describe("cut list", () => {
     // the cut list should ask for two of one panel rather than list them twice.
     const symmetric = PRESET_BY_ID.get("shirts-over-trousers")?.build();
     expect(symmetric).toBeDefined();
-    const rows = buildCutList(solve(symmetric as WardrobeSpec)).rows;
+    const rows = cutListOfModel(solve(symmetric as WardrobeSpec)).rows;
     const sides = rows.filter((row) => row.role === "side");
     expect(sides).toHaveLength(1);
     expect(sides[0]?.quantity).toBe(2);

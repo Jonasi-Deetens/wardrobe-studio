@@ -21,7 +21,9 @@ export type Layer =
   | "dimension"
   | "annotation"
   | "datum"
-  | "hidden";
+  | "hidden"
+  /** Press-brake bend lines on a folded sheet-metal blank. */
+  | "fold";
 
 export type Style = {
   readonly layer: Layer;
@@ -80,6 +82,7 @@ export const DXF_LAYER_NAMES: Record<Layer, string> = {
   annotation: "TEXT",
   datum: "DATUM",
   hidden: "HIDDEN",
+  fold: "BEND",
 };
 
 export function holeLayerName(diameter: number): string {

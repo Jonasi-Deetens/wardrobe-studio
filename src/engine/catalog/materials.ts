@@ -26,6 +26,11 @@ export type Material = {
   readonly density: number;
   /** Rendering colour, sRGB hex. */
   readonly color: string;
+  /**
+   * Stock this material comes in, when it is not the project's board size. Stainless
+   * sheet and cladding boards do not arrive as 2800 x 2070 panels.
+   */
+  readonly sheetSizeId?: string;
   readonly notes?: string;
 };
 
@@ -207,6 +212,101 @@ export const MATERIALS: readonly Material[] = [
     density: 680,
     color: "#e6d3ae",
   },
+  {
+    id: "pine-19-clad",
+    name: "Pine cladding board 19mm",
+    shortName: "Pine 19",
+    category: "solid",
+    thickness: 19,
+    hasGrain: true,
+    stiffness: 1.1,
+    safeShelfSpan: 700,
+    // Sold by the board, so this is the price of the equivalent area in boards.
+    pricePerSheet: 68,
+    density: 500,
+    color: "#dcbe92",
+    sheetSizeId: "board-3000x150",
+    notes: "Softwood cladding. Cheap, takes stain and oil, and moves with humidity.",
+  },
+  {
+    id: "larch-21-clad",
+    name: "Siberian larch cladding 21mm",
+    shortName: "Larch 21",
+    category: "solid",
+    thickness: 21,
+    hasGrain: true,
+    stiffness: 1.4,
+    safeShelfSpan: 800,
+    pricePerSheet: 124,
+    density: 590,
+    color: "#c99a63",
+    sheetSizeId: "board-3000x150",
+    notes: "Durable enough to leave unfinished outdoors, which is what a beach bar wants.",
+  },
+  {
+    id: "batten-20",
+    name: "Softwood batten 20mm",
+    shortName: "Batten 20",
+    category: "solid",
+    thickness: 20,
+    hasGrain: true,
+    stiffness: 1.1,
+    safeShelfSpan: 700,
+    pricePerSheet: 44,
+    density: 500,
+    color: "#cbb491",
+    sheetSizeId: "board-3000x150",
+    notes:
+      "Counter-battens behind cladding. Ripped from board, so it costs board area rather than a section price.",
+  },
+  {
+    id: "batten-45",
+    name: "Softwood batten 45mm",
+    shortName: "Batten 45",
+    category: "solid",
+    thickness: 45,
+    hasGrain: true,
+    stiffness: 3.2,
+    safeShelfSpan: 1100,
+    pricePerSheet: 88,
+    density: 500,
+    color: "#c4ab86",
+    sheetSizeId: "board-3000x150",
+    notes: "The deeper batten, where the cavity behind the cladding has to be ventilated.",
+  },
+  {
+    id: "inox15-304",
+    name: "Stainless steel 304 sheet 1.5mm, brushed",
+    shortName: "Inox 1.5",
+    category: "solid",
+    thickness: 1.5,
+    // A brushed finish has a direction and it shows badly if two adjacent panels
+    // disagree, so it is treated exactly like a grain.
+    hasGrain: true,
+    stiffness: 0.9,
+    safeShelfSpan: 700,
+    pricePerSheet: 210,
+    density: 7900,
+    color: "#c4c8cc",
+    sheetSizeId: "2000x1000",
+    notes:
+      "Folded, not sawn: a table top is cut flat with the folds allowed for, then bent up on the press brake.",
+  },
+  {
+    id: "inox12-304",
+    name: "Stainless steel 304 sheet 1.2mm, brushed",
+    shortName: "Inox 1.2",
+    category: "solid",
+    thickness: 1.2,
+    hasGrain: true,
+    stiffness: 0.6,
+    safeShelfSpan: 600,
+    pricePerSheet: 172,
+    density: 7900,
+    color: "#c4c8cc",
+    sheetSizeId: "2000x1000",
+    notes: "Fine for undershelves; a work top wants 1.5mm.",
+  },
 ];
 
 export const MATERIAL_BY_ID = new Map(MATERIALS.map((m) => [m.id, m]));
@@ -260,6 +360,9 @@ export const SHEET_SIZES: readonly SheetSize[] = [
   { id: "2800x2070", name: "2800 x 2070 (European board)", length: 2800, width: 2070 },
   { id: "3050x1300", name: "3050 x 1300", length: 3050, width: 1300 },
   { id: "2500x1250", name: "2500 x 1250", length: 2500, width: 1250 },
+  { id: "2000x1000", name: "2000 x 1000 (stainless sheet)", length: 2000, width: 1000 },
+  { id: "3000x1500", name: "3000 x 1500 (stainless sheet)", length: 3000, width: 1500 },
+  { id: "board-3000x150", name: "3000 x 150 (cladding board)", length: 3000, width: 150 },
 ];
 
 export const SHEET_SIZE_BY_ID = new Map(SHEET_SIZES.map((s) => [s.id, s]));

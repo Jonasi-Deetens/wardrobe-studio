@@ -1,6 +1,7 @@
 import { getMaterial } from "../catalog/materials";
 import type { CutList } from "../cutlist";
 import type { NestResult } from "../cutlist/nesting";
+import { endLabel } from "../cutlist/tube";
 import { OP_PURPOSE_LABELS, type Part } from "../core/part";
 
 /**
@@ -92,9 +93,115 @@ export function cutListToCsv(cutList: CutList): string {
   rows.push(["Sheet material", cutList.materialCost.toFixed(2)]);
   rows.push(["Edge banding", cutList.bandingCost.toFixed(2)]);
   rows.push(["Hardware", cutList.hardwareCost.toFixed(2)]);
+  if (cutList.metal.memberCount > 0) {
+    rows.push(["Metal sections", cutList.metalCost.toFixed(2)]);
+  }
   rows.push(["Labour", cutList.labourCost.toFixed(2)]);
   rows.push(["Total", cutList.totalCost.toFixed(2)]);
 
+  return toCsv(rows);
+}
+
+/**
+ * The tube schedule: what to cut from bar stock, at what angle, and how it nests.
+ *
+ * Both end cuts are on the row, because a mitred length means nothing without them: the
+ * same 600mm figure is a different piece of metal square-cut than it is at 45 degrees.
+ */
+export function tubeScheduleToCsv(cutList: CutList): string {
+  const { metal } = cutList;
+  const rows: (string | number | undefined)[][] = [
+    [
+      "Qty",
+      "Member",
+      "Profile",
+      "Alloy",
+      "Cut length (mm)",
+      "End A",
+      "End B",
+      "Holes",
+      "Metres",
+      "Mass (kg)",
+    ],
+  ];
+
+  for (const row of metal.rows) {
+    rows.push([
+      row.quantity,
+      row.label,
+      row.profile.shortName,
+      row.profile.alloy === "stainless-304" ? "304 stainless" : "mild steel",
+      row.length,
+      endLabel(row.ends[0]),
+      endLabel(row.ends[1]),
+      row.holeCount * row.quantity,
+      row.metres.toFixed(2),
+      row.mass.toFixed(2),
+    ]);
+  }
+
+  rows.push([]);
+  rows.push(["Profile totals"]);
+  rows.push(["Profile", "Pieces", "Metres", "Mass (kg)", "Stock bars", "Cost"]);
+  for (const total of metal.profileTotals) {
+    rows.push([
+      total.profile.name,
+      total.pieces,
+      total.metres.toFixed(2),
+      total.mass.toFixed(1),
+      total.bars,
+      total.cost.toFixed(2),
+    ]);
+  }
+
+  rows.push([]);
+  rows.push(["Bar cutting list"]);
+  rows.push(["Bar", "Profile", "Stock (mm)", "Cut", "At (mm)", "Length (mm)", "Offcut (mm)"]);
+  for (const bar of metal.nest.bars) {
+    bar.cuts.forEach((cut, index) => {
+      rows.push([
+        bar.index + 1,
+        index === 0 ? bar.profileId : "",
+        index === 0 ? bar.stockLength : "",
+        cut.label,
+        cut.at,
+        cut.length,
+        index === bar.cuts.length - 1 ? bar.offcut : "",
+      ]);
+    });
+  }
+
+  rows.push([]);
+  rows.push(["Bars", metal.nest.bars.length]);
+  rows.push(["Bar waste", `${metal.nest.wastePercent.toFixed(1)}%`]);
+  rows.push(["Total mass (kg)", metal.totalMass.toFixed(1)]);
+  if (metal.nest.oversize.length > 0) {
+    rows.push([
+      "Longer than a stock bar",
+      metal.nest.oversize.map((entry) => `${entry.label} (${entry.length}mm)`).join("; "),
+    ]);
+  }
+  return toCsv(rows);
+}
+
+/** The weld schedule, grouped by size and whether the joint is ground flush. */
+export function weldScheduleToCsv(cutList: CutList): string {
+  const rows: (string | number | undefined)[][] = [
+    ["Joints", "Type", "Size (mm)", "Finish", "Run (m)", "Examples"],
+  ];
+  for (const row of cutList.metal.welds) {
+    rows.push([
+      row.count,
+      row.kind,
+      row.size,
+      row.ground ? "ground flush" : "as welded",
+      row.metres.toFixed(2),
+      row.examples.join("; "),
+    ]);
+  }
+  rows.push([]);
+  rows.push(["Joints", cutList.metal.weldCount]);
+  rows.push(["Total run (m)", cutList.metal.weldMetres.toFixed(2)]);
   return toCsv(rows);
 }
 

@@ -4,8 +4,8 @@ import type { NestResult } from "@/engine/cutlist/nesting";
 import { modelToDxfFiles } from "@/engine/export/dxf";
 import { buildBooklet, type BookletInput, type BookletView } from "@/engine/export/pdf";
 import { createZip } from "@/engine/export/zip";
-import { solve } from "@/engine/solver";
-import type { WardrobeSpec } from "@/engine/spec/types";
+import { cutListInputOf, scopeProject, solveProject } from "@/engine/project";
+import type { ProjectSpec } from "@/engine/spec/types";
 
 /**
  * The PDF and the DXF archive, off the main thread.
@@ -15,7 +15,7 @@ import type { WardrobeSpec } from "@/engine/spec/types";
  * pinned, which reads as a crash. The engine is pure data in and bytes out, so it moves
  * here whole.
  *
- * The spec crosses instead of the solved model. It is a fraction of the size, and `solve`
+ * The spec crosses instead of the solved model. It is a fraction of the size, and solving
  * is deterministic, so the worker rebuilds exactly the model the screen is showing — no
  * cloning a graph of frozen parts, and no chance of sending a stale one.
  */
@@ -23,12 +23,14 @@ import type { WardrobeSpec } from "@/engine/spec/types";
 export type ExportJob =
   | {
       readonly kind: "pdf";
-      readonly spec: WardrobeSpec;
+      readonly spec: ProjectSpec;
+      /** One unit, or null for the whole room, matching the filter on screen. */
+      readonly unitId: string | null;
       readonly nest: NestResult | null;
       readonly views: readonly BookletView[];
       readonly sections: NonNullable<BookletInput["sections"]>;
     }
-  | { readonly kind: "dxf"; readonly spec: WardrobeSpec };
+  | { readonly kind: "dxf"; readonly spec: ProjectSpec; readonly unitId: string | null };
 
 export type ExportRequest = ExportJob & { readonly id: number };
 
@@ -49,20 +51,22 @@ self.onmessage = (event: MessageEvent<ExportRequest>) => {
 
   void (async () => {
     try {
-      const model = solve(request.spec);
+      const project = scopeProject(solveProject(request.spec), request.unitId);
       let bytes: Uint8Array;
       let fileCount = 0;
 
       if (request.kind === "dxf") {
-        const files = modelToDxfFiles(model.parts);
+        const files = modelToDxfFiles(project.parts, project.members);
         fileCount = files.length;
         bytes = createZip(files.map((file) => ({ name: file.filename, content: file.content })));
       } else {
         bytes = await buildBooklet({
-          model,
-          cutList: buildCutList(model),
+          project,
+          cutList: buildCutList(cutListInputOf(project)),
           nest: request.nest,
-          findings: advise(model),
+          findings: project.units.flatMap((unit) =>
+            unit.detail.kind === "wardrobe" ? advise(unit.detail.model) : [],
+          ),
           views: request.views,
           sections: request.sections,
         });

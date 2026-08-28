@@ -1,6 +1,10 @@
 /**
- * The complete parameter set for a wardrobe. This is the only thing that gets
- * saved, shared or undone; everything else in the app is derived from it.
+ * The complete parameter set for a project: a room, and the units standing in it.
+ * This is the only thing that gets saved, shared or undone; everything else in the
+ * app is derived from it.
+ *
+ * Most of this file describes a wardrobe, which is one kind of unit. The room and
+ * the unit list are at the bottom.
  */
 
 /* ---------------------------------------------------------------- carcase - */
@@ -280,6 +284,34 @@ export type JoinerySpec = {
   readonly shelfPinInset: number;
 };
 
+/* -------------------------------------------------------------- cladding -- */
+
+/**
+ * A skin over the outside of a unit. A bar front is the obvious case: the carcase or
+ * the frame is whatever it needs to be structurally, and the face the customer sees
+ * is boards or slats fixed over it.
+ */
+export type CladdingStyle = "none" | "slats" | "board" | "tongue-groove";
+
+export type CladdingFace = "front" | "left" | "right" | "back";
+
+export type CladdingSpec = {
+  readonly style: CladdingStyle;
+  readonly materialId: string;
+  /** Which faces of the unit are clad. */
+  readonly faces: readonly CladdingFace[];
+  /** Face width of one slat or board. */
+  readonly pieceWidth: number;
+  /** Gap between pieces. Board and tongue-and-groove close up, so they ignore it. */
+  readonly gap: number;
+  readonly direction: "horizontal" | "vertical";
+  /** Battens behind the cladding hold it this far off the unit. */
+  readonly standoff: number;
+  readonly fixing: "secret" | "face-screwed" | "glued";
+  /** How far the cladding runs past the top of the unit, for a bar front. */
+  readonly riseAboveTop: number;
+};
+
 /* ------------------------------------------------------------ production -- */
 
 export type GrainPolicy = "respect" | "ignore";
@@ -299,16 +331,30 @@ export type ProductionSpec = {
   readonly sheetTrim: number;
   readonly grainPolicy: GrainPolicy;
   readonly banding: BandingDefaults;
+  /** Length of a stock bar of tube, which metal members are cut from. */
+  readonly stockBarLength: number;
+  /** Cut-off allowance per metal cut; a cold saw takes about 2mm. */
+  readonly barKerf: number;
   /** Shop rate used for the cost estimate, per hour. */
   readonly labourRate: number;
   /** Estimated minutes per panel for cutting, banding and drilling. */
   readonly minutesPerPanel: number;
+  /** Estimated minutes per metal member for cutting, and per weld for welding. */
+  readonly minutesPerMember: number;
+  readonly minutesPerWeld: number;
 };
 
-/* --------------------------------------------------------------- the spec - */
+/* --------------------------------------------------------- the wardrobe --- */
 
-export const SPEC_VERSION = 1;
-
+/**
+ * Everything about one wardrobe, with the project-level sections folded back in.
+ *
+ * This is what the wardrobe solver takes. It is not what gets saved: a saved unit
+ * holds the wardrobe's own sections only, and `wardrobeSpecOf` puts the name, the
+ * version and the shop's production settings back on top of it. Keeping this shape
+ * means the solver, the machining rules, the advisor and the assembly sequence never
+ * had to learn that a project can hold more than one wardrobe.
+ */
 export type WardrobeSpec = {
   readonly version: number;
   readonly meta: {
@@ -321,8 +367,278 @@ export type WardrobeSpec = {
   readonly handles: HandlesSpec;
   readonly drawers: DrawersSpec;
   readonly joinery: JoinerySpec;
+  readonly cladding: CladdingSpec;
   readonly production: ProductionSpec;
 };
+
+/* ------------------------------------------------------------------ room -- */
+
+export type WallSide = "back" | "front" | "left" | "right";
+
+export type RoofKind = "flat" | "shed" | "gable";
+
+/**
+ * A hole in a wall. Only the hole is modelled: no frame, no sill, no glazing, which
+ * is enough to see whether a unit blocks a window or a door.
+ */
+export type Opening = {
+  readonly id: string;
+  readonly wall: WallSide;
+  /** Distance along the wall from its left end, seen from inside the room. */
+  readonly x: number;
+  /** Height of the sill above the floor. Zero makes it a doorway. */
+  readonly sill: number;
+  readonly width: number;
+  readonly height: number;
+};
+
+/**
+ * The space the units stand in. The room is context: it is drawn, and it is what the
+ * advisor measures clearances against, but nothing about it is manufactured, so no
+ * part of it reaches the cut list.
+ */
+export type RoomSpec = {
+  /** Clear internal width, left to right. */
+  readonly width: number;
+  /** Clear internal depth, back to front. */
+  readonly depth: number;
+  /** Clear height at the eaves. A pitched roof rises above this. */
+  readonly height: number;
+  readonly wallThickness: number;
+  readonly roof: {
+    readonly kind: RoofKind;
+    /** Degrees from horizontal. */
+    readonly pitch: number;
+    /** The axis the roof slopes along. A gable's ridge runs across it. */
+    readonly slopeAxis: "x" | "z";
+    /** Swaps which end of that axis is the high one. Shed roofs only. */
+    readonly flip: boolean;
+    /** How far the roof oversails the walls. */
+    readonly overhang: number;
+    readonly thickness: number;
+  };
+  readonly openings: readonly Opening[];
+};
+
+/* ----------------------------------------------------------------- units -- */
+
+export type UnitKind = "wardrobe" | "work-table" | "counter";
+
+/* ------------------------------------------------------------ work table -- */
+
+/**
+ * A commercial stainless work table.
+ *
+ * The proportions are not free: a gastronorm pan is 530mm deep, so a table is 600 or 700
+ * deep and nothing in between is useful; a work surface is 850 to 900 high because that is
+ * what a standing adult can lean on; and legs are 40x40 square section or 38.1mm round
+ * because those are the sizes the fittings are made for.
+ */
+export type WorkTableTopEdge =
+  /** The simplest and the most common: the whole edge turned down 40mm. */
+  | "folded-down"
+  /** Turned down, then back in under itself. Stiffer, and no raw edge underneath. */
+  | "boxed"
+  /** No fold at all, for a top let into a frame. */
+  | "square";
+
+export type WorkTableFeet = "bullet" | "castor" | "none";
+
+export type WorkTableSpec = {
+  readonly width: number;
+  readonly depth: number;
+  /** To the top of the work surface. */
+  readonly height: number;
+  readonly top: {
+    readonly materialId: string;
+    readonly edge: WorkTableTopEdge;
+    /** How far the edge turns down. 40mm is standard. */
+    readonly edgeReturn: number;
+    /** Rear upstand height. 0 for none, otherwise 100 or 150. */
+    readonly upstand: number;
+    /** The upstand's own top return, folded back towards the wall. */
+    readonly upstandReturn: number;
+  };
+  readonly legs: {
+    readonly profileId: string;
+    /** How far the legs are set in from the outside faces of the top. */
+    readonly inset: number;
+    readonly feet: WorkTableFeet;
+    readonly braced: boolean;
+  };
+  readonly shelves: {
+    /** 0, 1 or 2 undershelves. */
+    readonly count: number;
+    readonly materialId: string;
+    /** Height above the floor of the lowest shelf. */
+    readonly lowest: number;
+    /** Gap between shelves when there are two. */
+    readonly spacing: number;
+    /** Turn the shelf edges down as well, which is what stops a thin shelf drumming. */
+    readonly edgeReturn: number;
+  };
+  /** Grind the visible welds flush. What a front-of-house table needs. */
+  readonly groundWelds: boolean;
+};
+
+export type WorkTableUnitSpec = { readonly kind: "work-table" } & WorkTableSpec & {
+    readonly cladding: CladdingSpec;
+  };
+
+/* ---------------------------------------------------------------- counter -- */
+
+/**
+ * A counter: a welded tube frame, a panel top, and whatever is hung inside it.
+ *
+ * This is the beach-bar and shop-counter case, and it is a different animal from the
+ * wardrobe even though it shares the drawer. The frame carries everything, the top is a
+ * board rather than a folded sheet, and the front is a face to be clad rather than a
+ * carcase side.
+ *
+ * Heights are not free either. A serving counter is 900 to 950 so it works standing;
+ * a bar counter people sit at is 1050 to 1100, which is what a bar stool is made for.
+ */
+export type CounterTopMaterial = "panel" | "inox";
+
+export type CounterSpec = {
+  readonly width: number;
+  readonly depth: number;
+  /** To the top of the working surface, on the serving side. */
+  readonly height: number;
+  readonly frame: {
+    readonly profileId: string;
+    /** How far the frame is set back from the outside faces of the top. */
+    readonly inset: number;
+    readonly feet: WorkTableFeet;
+    readonly braced: boolean;
+    /** Rail height above the floor for the bottom ring, which also carries a shelf. */
+    readonly bottomRail: number;
+  };
+  readonly top: {
+    readonly kind: CounterTopMaterial;
+    readonly materialId: string;
+    readonly bandingId: string;
+    /** How far the top oversails the frame at the front, for a bar to lean on. */
+    readonly frontOverhang: number;
+    /** And at the two ends. */
+    readonly endOverhang: number;
+    /** Behind, where the counter stands against something. */
+    readonly backOverhang: number;
+  };
+  /**
+   * A raised bar shelf over the back of the counter, at drinking height. 0 for none.
+   * This is the part that makes a counter a bar rather than a table.
+   */
+  readonly bar: {
+    /** Height above the floor of the bar surface. 0 disables it. */
+    readonly height: number;
+    readonly depth: number;
+    readonly materialId: string;
+  };
+  /** A carcase of drawers dropped into the frame, or none. */
+  readonly drawerBank: {
+    readonly enabled: boolean;
+    /** Which end of the counter it sits at, measured from the left. */
+    readonly fromLeft: number;
+    readonly width: number;
+    readonly count: number;
+    readonly carcaseMaterialId: string;
+    readonly frontMaterialId: string;
+    readonly handleId: string;
+    readonly slideId: string;
+  };
+  /** Open shelves inside the frame, above the bottom rail. */
+  readonly shelves: {
+    readonly count: number;
+    readonly materialId: string;
+    readonly lowest: number;
+    readonly spacing: number;
+    /** Keep the shelf back from the front face, so it is not seen from the outside. */
+    readonly setback: number;
+  };
+  readonly groundWelds: boolean;
+};
+
+export type CounterUnitSpec = { readonly kind: "counter" } & CounterSpec & {
+    readonly cladding: CladdingSpec;
+  };
+
+/**
+ * A wardrobe as it is stored in a project: its own sections, without the name, the
+ * version or the production settings, which belong to the project as a whole.
+ */
+export type WardrobeUnitSpec = { readonly kind: "wardrobe" } & Omit<
+  WardrobeSpec,
+  "version" | "meta" | "production"
+>;
+
+export type UnitSpec = WardrobeUnitSpec | WorkTableUnitSpec | CounterUnitSpec;
+
+/**
+ * A unit and where it stands.
+ *
+ * A unit is designed in its own space — +X right, +Y up, +Z back to front, origin on
+ * the floor at the back-left corner of its footprint — and placed in the room by
+ * moving that origin to `at` and turning it about it. A yaw of zero therefore puts
+ * the unit's back against the back wall, facing into the room.
+ */
+export type UnitPlacement = {
+  readonly id: string;
+  readonly name: string;
+  readonly at: {
+    readonly x: number;
+    readonly z: number;
+    /** Degrees, turning the unit anticlockwise seen from above. */
+    readonly yaw: number;
+  };
+  readonly unit: UnitSpec;
+};
+
+/* -------------------------------------------------------------- the spec -- */
+
+/**
+ * Version 1 was a single wardrobe and was the whole document. Version 2 wraps that in
+ * a room and a list of units; `migrate.ts` upgrades a version 1 file by putting its
+ * wardrobe in a default room at the origin.
+ */
+export const SPEC_VERSION = 2;
+
+export type ProjectSpec = {
+  readonly version: number;
+  readonly meta: {
+    readonly name: string;
+    readonly notes: string;
+  };
+  readonly room: RoomSpec;
+  readonly units: readonly UnitPlacement[];
+  /** The shop, not the design: sheet stock, saw, bar stock, rates. */
+  readonly production: ProductionSpec;
+};
+
+/** Rebuilds the shape the wardrobe solver takes from a stored unit. */
+export function wardrobeSpecOf(
+  project: ProjectSpec,
+  unit: WardrobeUnitSpec,
+  name?: string,
+): WardrobeSpec {
+  const { kind: _kind, ...body } = unit;
+  return {
+    version: project.version,
+    meta: { name: name ?? project.meta.name, notes: project.meta.notes },
+    production: project.production,
+    ...body,
+  };
+}
+
+/** The units in a project that are wardrobes, with their placement. */
+export function wardrobeUnits(
+  project: ProjectSpec,
+): readonly (UnitPlacement & { readonly unit: WardrobeUnitSpec })[] {
+  return project.units.filter(
+    (placed): placed is UnitPlacement & { unit: WardrobeUnitSpec } =>
+      placed.unit.kind === "wardrobe",
+  );
+}
 
 /* ------------------------------------------------------------ tree helpers - */
 
@@ -419,6 +735,43 @@ export const FITTING_LABELS: Record<FittingKind, string> = {
   drawers: "Drawers",
   "shoe-rack": "Shoe rack",
   "pullout-trays": "Pull-out trays",
+};
+
+export const UNIT_KIND_LABELS: Record<UnitKind, string> = {
+  wardrobe: "Wardrobe",
+  "work-table": "Work table",
+  counter: "Counter",
+};
+
+export const COUNTER_TOP_LABELS: Record<CounterTopMaterial, string> = {
+  panel: "Board on the frame",
+  inox: "Folded stainless tray",
+};
+
+export const WORK_TABLE_EDGE_LABELS: Record<WorkTableTopEdge, string> = {
+  "folded-down": "Turned down",
+  boxed: "Boxed edge",
+  square: "Square, no fold",
+};
+
+export const WORK_TABLE_FEET_LABELS: Record<WorkTableFeet, string> = {
+  bullet: "Adjustable bullet feet",
+  castor: "Braked castors",
+  none: "None, legs on the floor",
+};
+
+export const CLADDING_STYLE_LABELS: Record<CladdingStyle, string> = {
+  none: "No cladding",
+  slats: "Slats with gaps",
+  board: "Butted boards",
+  "tongue-groove": "Tongue and groove",
+};
+
+export const WALL_SIDE_LABELS: Record<WallSide, string> = {
+  back: "Back wall",
+  front: "Front wall",
+  left: "Left wall",
+  right: "Right wall",
 };
 
 export const CARCASE_CONSTRUCTION_LABELS: Record<CarcaseConstruction, string> = {

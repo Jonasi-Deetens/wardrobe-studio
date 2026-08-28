@@ -1,6 +1,6 @@
 import { del, get, set } from "idb-keyval";
 import { loadSpec, serialiseSpec } from "@/engine/spec/migrate";
-import type { WardrobeSpec } from "@/engine/spec/types";
+import type { ProjectSpec } from "@/engine/spec/types";
 
 /**
  * Local-first storage.
@@ -18,7 +18,7 @@ export type Autosave = {
   readonly savedAt: number;
 };
 
-export async function writeAutosave(spec: WardrobeSpec): Promise<number> {
+export async function writeAutosave(spec: ProjectSpec): Promise<number> {
   const savedAt = Date.now();
   const entry: Autosave = { json: serialiseSpec(spec), savedAt };
   await set(AUTOSAVE_KEY, entry);
@@ -69,7 +69,7 @@ export async function readSettings(): Promise<StoredSettings | null> {
  * a chat window and one that gets truncated. The fragment is used rather than a query
  * string so the design never reaches a server log.
  */
-export async function encodeSpecToHash(spec: WardrobeSpec): Promise<string> {
+export async function encodeSpecToHash(spec: ProjectSpec): Promise<string> {
   const json = serialiseSpec(spec);
   const bytes = new TextEncoder().encode(json);
   const compressed = await deflate(bytes);
@@ -79,7 +79,7 @@ export async function encodeSpecToHash(spec: WardrobeSpec): Promise<string> {
 }
 
 export type HashLoad = {
-  readonly spec: WardrobeSpec;
+  readonly spec: ProjectSpec;
   readonly repairs: readonly string[];
 };
 

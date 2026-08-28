@@ -4,11 +4,14 @@ import {
   DoorClosed,
   DoorOpen,
   Eye,
+  Focus,
   Grid3x3,
+  Home,
   Layers,
   Ruler,
   ScanEye,
   Square,
+  Triangle,
   Wrench,
 } from "lucide-react";
 import { PART_ROLE_LABELS, type PartRole } from "@/engine/core/part";
@@ -45,6 +48,7 @@ export function ViewportControls() {
   const view = useStudio((state) => state.view);
   const setView = useStudio((state) => state.setView);
   const requestView = useStudio((state) => state.requestView);
+  const units = useStudio((state) => state.project.units.length);
 
   return (
     <>
@@ -124,6 +128,31 @@ export function ViewportControls() {
             onClick={() => setView({ showHardware: !view.showHardware })}
             icon={<Wrench className="size-3.5" />}
           />
+          <div className="mx-0.5 h-5 w-px bg-line" />
+          <Toggle
+            active={view.showRoom}
+            label={view.showRoom ? "Hide the room" : "Show the room — floor, walls, openings"}
+            onClick={() => setView({ showRoom: !view.showRoom })}
+            icon={<Home className="size-3.5" />}
+          />
+          <Toggle
+            active={view.showRoof}
+            label={view.showRoof ? "Hide the roof" : "Show the roof"}
+            onClick={() => setView({ showRoof: !view.showRoof })}
+            icon={<Triangle className="size-3.5" />}
+          />
+          {units > 1 ? (
+            <Toggle
+              active={view.isolateUnit}
+              label={
+                view.isolateUnit
+                  ? "Show every unit in the room"
+                  : "Work on the selected unit alone"
+              }
+              onClick={() => setView({ isolateUnit: !view.isolateUnit })}
+              icon={<Focus className="size-3.5" />}
+            />
+          ) : null}
         </div>
 
         <IsolateMenu />
